@@ -1,0 +1,39 @@
+{
+  "name": "cutbend-server",
+  "version": "1.0.0",
+  "description": "Backend server for Cutbend e-commerce platform",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "build": "npm install"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "axios": "^1.13.2",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.8.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.2.1",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.0.3",
+    "multer": "^1.4.5-lts.1",
+    "node-fetch": "^3.3.2",
+    "nodemailer": "^6.10.1",
+    "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.14.0",
+    "twilio": "^4.23.0",
+    "ws": "^8.18.3",
+    "xlsx": "^0.18.5",
+    "yauzl": "^3.2.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
