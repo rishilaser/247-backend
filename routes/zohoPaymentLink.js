@@ -4,13 +4,47 @@ const { authenticateToken } = require('../middleware/auth');
 const Quotation = require('../models/Quotation');
 const Inquiry = require('../models/Inquiry');
 const Payment = require('../models/Payment');
-const { applyPaymentSuccess } = require('../services/zohoPaymentSettlement');
+const { applyPaymentSuccess, applyPaymentFailure } = require('../services/zohoPaymentSettlement');
 const { syncInquiryWithQuotationPayment } = require('../services/inquiryPaymentSyncHelper');
 const { ensurePendingOnlineOrder } = require('../services/ensurePendingOrder');
+const {
+  normalizeStatus,
+  extractZohoPaymentLinkPayload,
+  isZohoPaid,
+  isZohoFailedOrCancelled,
+  refreshZohoAccessToken,
+  getZohoAccessToken,
+  fetchZohoPaymentLink,
+  verifyZohoReturnUrlSignature,
+  isZohoReturnPaidStatus,
+  isZohoReturnFailedStatus,
+  testZohoPaymentsAuth,
+} = require('../services/zohoPaymentHelpers');
+const { logZohoPaymentEvent } = require('../services/zohoPaymentLogger');
 
 const router = express.Router();
 
-/** Ensures frontend can call sync after redirect (dashboard or custom URL without placeholders). */
+/**
+ * Zoho Payments (IN) expects `phone` as local digits (e.g. 9890705524) with `phone_country_code` "IN".
+ * Stored values like "09890705524" or "+91 98907 05524" must be normalized or Zoho returns 400.
+ */
+function normalizePhoneForZohoPayments(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return { phone: undefined, phone_country_code: undefined };
+  let local = digits;
+  if (local.startsWith('91') && local.length === 12) {
+    local = local.slice(2);
+  }
+  if (local.startsWith('0') && local.length === 11) {
+    local = local.slice(1);
+  }
+  if (local.length !== 10) {
+    return { phone: digits, phone_country_code: undefined };
+  }
+  return { phone: local, phone_country_code: 'IN' };
+}
+
+/** Appends orderId to return URL when missing so post-checkout sync can resolve the quotation. */
 function appendOrderIdToReturnUrl(url, quotationId) {
   if (!url) return url;
   const ref = String(quotationId);
@@ -30,7 +64,11 @@ function appendOrderIdToReturnUrl(url, quotationId) {
  */
 function buildZohoReturnUrl(quotationId) {
   const ref = String(quotationId);
-  const tpl = (process.env.ZOHO_PAYMENTS_RETURN_URL || '').trim();
+  const isDev = process.env.NODE_ENV !== 'production';
+  const localTpl = (process.env.ZOHO_PAYMENTS_RETURN_URL_LOCAL || '').trim();
+  const prodTpl = (process.env.ZOHO_PAYMENTS_RETURN_URL || '').trim();
+  // In dev, prefer LOCAL return URL so Zoho redirects to localhost with ?status=... (not live site).
+  const tpl = isDev && localTpl ? localTpl : prodTpl;
   let out;
   if (tpl) {
     const url = tpl
@@ -49,144 +87,34 @@ function buildZohoReturnUrl(quotationId) {
   return appendOrderIdToReturnUrl(out, quotationId);
 }
 
-async function refreshZohoAccessToken() {
-  const refreshToken = process.env.ZOHO_PAYMENTS_REFRESH_TOKEN;
-  const clientId = process.env.ZOHO_PAYMENTS_CLIENT_ID;
-  const clientSecret = process.env.ZOHO_PAYMENTS_CLIENT_SECRET;
-  if (!refreshToken || !clientId || !clientSecret) return null;
-
-  const tokenResp = await axios.post(
-    'https://accounts.zoho.in/oauth/v2/token',
-    new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken
-    }).toString(),
-    {
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      timeout: 30000
-    }
-  );
-
-  const accessToken = tokenResp.data?.access_token;
-  if (!accessToken) return null;
-  process.env.ZOHO_PAYMENTS_ACCESS_TOKEN = accessToken;
-  return accessToken;
-}
-
-async function fetchZohoPaymentLink(paymentLinkId, accessToken) {
-  const accountId = process.env.ZOHO_PAYMENTS_ACCOUNT_ID;
-  const zohoBase = (process.env.ZOHO_PAYMENTS_API_BASE || 'https://payments.zoho.in').trim().replace(/\/+$/, '');
-  const url = `${zohoBase}/api/v1/paymentlinks/${encodeURIComponent(paymentLinkId)}?account_id=${encodeURIComponent(accountId)}`;
-  async function get(token) {
-    return axios.get(url, {
-      headers: { Authorization: `Zoho-oauthtoken ${token}` },
-      timeout: 30000,
-    });
-  }
-  try {
-    return await get(accessToken);
-  } catch (e) {
-    if (e?.response?.status === 401) {
-      const newToken = await refreshZohoAccessToken();
-      if (newToken) return await get(newToken);
-    }
-    throw e;
-  }
-}
-
-function normalizeStatus(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function isZohoPaid(paymentLinkPayload) {
-  const pl = paymentLinkPayload || {};
-
-  const candidateStatuses = [
-    pl.status,
-    pl.payment_status,
-    pl.payment_link_status,
-    pl.link_status,
-    pl.last_payment_status,
-    pl.last_payment?.status,
-    pl.data?.status,
-    pl.data?.payment_status,
-  ].map(normalizeStatus).filter(Boolean);
-
-  const paidStatuses = new Set(['paid', 'success', 'succeeded', 'completed']);
-  if (candidateStatuses.some((s) => paidStatuses.has(s))) {
-    return { paid: true, statuses: candidateStatuses };
-  }
-
-  // Some Zoho payloads expose payment attempts as an array.
-  const paymentAttempts = Array.isArray(pl.payments) ? pl.payments : [];
-  if (
-    paymentAttempts.some((p) =>
-      paidStatuses.has(normalizeStatus(p?.status)) ||
-      paidStatuses.has(normalizeStatus(p?.payment_status))
-    )
-  ) {
-    return { paid: true, statuses: candidateStatuses };
-  }
-
-  // Fallback heuristic: if due amount is zero and amount paid is positive.
-  const amountDue = Number(pl.amount_due ?? pl.balance_due ?? NaN);
-  const amountPaid = Number(pl.amount_paid ?? NaN);
-  if (Number.isFinite(amountDue) && Number.isFinite(amountPaid) && amountDue <= 0 && amountPaid > 0) {
-    return { paid: true, statuses: candidateStatuses };
-  }
-
-  return { paid: false, statuses: candidateStatuses };
-}
-
-function isZohoFailedOrCancelled(paymentLinkPayload) {
-  const pl = paymentLinkPayload || {};
-  const candidateStatuses = [
-    pl.status,
-    pl.payment_status,
-    pl.payment_link_status,
-    pl.link_status,
-    pl.last_payment_status,
-    pl.last_payment?.status,
-    pl.data?.status,
-    pl.data?.payment_status,
-  ].map(normalizeStatus).filter(Boolean);
-
-  const failedStatuses = new Set([
-    'failed',
-    'failure',
-    'cancelled',
-    'canceled',
-    'expired',
-    'declined',
-    'aborted',
-  ]);
-
-  if (candidateStatuses.some((s) => failedStatuses.has(s))) {
-    return { failed: true, statuses: candidateStatuses };
-  }
-
-  const paymentAttempts = Array.isArray(pl.payments) ? pl.payments : [];
-  if (
-    paymentAttempts.some((p) =>
-      failedStatuses.has(normalizeStatus(p?.status)) ||
-      failedStatuses.has(normalizeStatus(p?.payment_status))
-    )
-  ) {
-    return { failed: true, statuses: candidateStatuses };
-  }
-
-  return { failed: false, statuses: candidateStatuses };
-}
-
 /**
  * POST /api/zoho/sync-payment-status
  * After redirect from Zoho: ask Zoho for payment-link status and update DB if paid (same outcome as webhook).
  */
+async function finalizeSyncSuccess(res, quotationId, quotation, plOrMeta) {
+  const inquiryAfter = await Inquiry.findById(quotation.inquiryId).lean();
+  if (inquiryAfter) {
+    await syncInquiryWithQuotationPayment(inquiryAfter);
+  }
+  const qAfter = await Quotation.findById(quotationId)
+    .select('orderPaymentWorkflowStatus payment_status status')
+    .lean();
+  return res.json({
+    success: true,
+    updated: true,
+    gatewayPaid: true,
+    syncMethod: plOrMeta?.syncMethod || 'api',
+    quotationId: String(quotationId),
+    inquiryStatus: inquiryAfter?.status,
+    orderPaymentWorkflowStatus: qAfter?.orderPaymentWorkflowStatus,
+    payment_status: qAfter?.payment_status,
+    zohoStatus: plOrMeta?.zohoStatus || 'paid',
+  });
+}
+
 router.post('/sync-payment-status', authenticateToken, async (req, res) => {
   try {
-    const { quotationId } = req.body || {};
+    const { quotationId, zohoReturn } = req.body || {};
     if (!quotationId) {
       return res.status(400).json({ success: false, message: 'quotationId is required' });
     }
@@ -206,6 +134,71 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
+    // Path A: Zoho redirect query params (works without ZohoPay.payments.READ scope).
+    if (zohoReturn && (zohoReturn.status || zohoReturn.payment_link_id)) {
+      const sig = verifyZohoReturnUrlSignature(zohoReturn);
+      if (!sig.ok && sig.reason !== 'signing_key_missing') {
+        logZohoPaymentEvent('sync', 'error', {
+          quotationId: String(quotationId),
+          paymentLinkId: zohoReturn.payment_link_id,
+          error: `return_url_signature_${sig.reason}`,
+          zohoPayload: zohoReturn,
+        });
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid payment return signature',
+          signatureCheck: sig.reason,
+        });
+      }
+
+      if (isZohoReturnPaidStatus(zohoReturn.status)) {
+        const amountRaw = zohoReturn.amount;
+        const amount =
+          typeof amountRaw === 'string' ? Number(amountRaw) : typeof amountRaw === 'number' ? amountRaw : undefined;
+
+        await applyPaymentSuccess(String(quotationId), {
+          payment_link_id: zohoReturn.payment_link_id || quotation.zohoPaymentLinkId,
+          zoho_payment_id: zohoReturn.payment_id,
+          amount: Number.isFinite(amount) ? amount : undefined,
+        });
+
+        logZohoPaymentEvent('sync', 'paid', {
+          quotationId: String(quotationId),
+          paymentLinkId: zohoReturn.payment_link_id,
+          zohoStatus: zohoReturn.status,
+          zohoPayload: zohoReturn,
+          dbUpdated: true,
+          syncMethod: 'return_url',
+        });
+
+        return finalizeSyncSuccess(res, quotationId, quotation, {
+          syncMethod: 'return_url',
+          zohoStatus: normalizeStatus(zohoReturn.status),
+        });
+      }
+
+      if (isZohoReturnFailedStatus(zohoReturn.status)) {
+        await applyPaymentFailure(String(quotationId), {
+          payment_link_id: zohoReturn.payment_link_id || quotation.zohoPaymentLinkId,
+        });
+        logZohoPaymentEvent('sync', 'failed', {
+          quotationId: String(quotationId),
+          paymentLinkId: zohoReturn.payment_link_id,
+          zohoStatus: zohoReturn.status,
+          zohoPayload: zohoReturn,
+          dbUpdated: true,
+          syncMethod: 'return_url',
+        });
+        return res.json({
+          success: true,
+          updated: true,
+          gatewayPaid: false,
+          syncMethod: 'return_url',
+          message: 'Payment failed or cancelled',
+        });
+      }
+    }
+
     const paymentLinkId = quotation.zohoPaymentLinkId;
     if (!paymentLinkId) {
       return res.status(400).json({
@@ -214,8 +207,8 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
       });
     }
 
-    let accessToken = process.env.ZOHO_PAYMENTS_ACCESS_TOKEN;
     const accountId = process.env.ZOHO_PAYMENTS_ACCOUNT_ID;
+    const accessToken = await getZohoAccessToken();
     if (!accessToken || !accountId) {
       return res.status(500).json({
         success: false,
@@ -229,29 +222,47 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
     } catch (e) {
       const status = e?.response?.status;
       const data = e?.response?.data;
-      console.error('Zoho sync payment link fetch error:', { status, data: data || e?.message });
+      logZohoPaymentEvent('sync', 'error', {
+        quotationId: String(quotationId),
+        paymentLinkId: String(paymentLinkId),
+        zohoHttpStatus: status,
+        error: data?.message || data?.error_description || e?.message,
+        zohoResponse: data,
+      });
+      const rateLimited =
+        status === 400 &&
+        /too many requests/i.test(String(data?.error_description || data?.message || ''));
+      if (rateLimited) {
+        return res.json({
+          success: true,
+          updated: false,
+          rateLimited: true,
+          message: 'Zoho rate limit; try again shortly',
+        });
+      }
+      // Never return 401 here — the axios client treats 401 as "user logged out" and redirects to /login.
       return res.status(502).json({
         success: false,
-        message: data?.message || 'Could not verify payment with Zoho',
+        zohoError: true,
+        zohoHttpStatus: status,
+        message: data?.message || data?.error_description || 'Could not verify payment with Zoho',
+        authHint:
+          status === 401
+            ? 'OAuth token lacks ZohoPay.payments.READ. Regenerate refresh token with READ scope, or rely on return_url params / webhook.'
+            : undefined,
       });
     }
 
-    const pl =
-      zohoResp.data?.payment_link ||
-      zohoResp.data?.paymentlink ||
-      zohoResp.data?.data?.payment_link ||
-      zohoResp.data;
+    const pl = extractZohoPaymentLinkPayload(zohoResp.data);
     const zohoPaymentCheck = isZohoPaid(pl);
 
     if (!zohoPaymentCheck.paid) {
       const zohoFailureCheck = isZohoFailedOrCancelled(pl);
 
-      // Healing path: if older records were incorrectly marked as paid/order_created
-      // but Zoho shows no successful payment, move them back to accepted.
+      // Only heal rows that were marked Paid/Success in DB while Zoho shows no payment.
       const shouldRollbackFalsePaid =
         quotation.orderPaymentWorkflowStatus === 'Paid' ||
-        quotation.payment_status === 'Success' ||
-        quotation.status === 'order_created';
+        quotation.payment_status === 'Success';
 
       if (shouldRollbackFalsePaid) {
         const rollbackSet = {
@@ -272,10 +283,25 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
         );
       }
 
+      const outcome = zohoFailureCheck.failed ? 'failed' : 'pending';
+      logZohoPaymentEvent('sync', outcome, {
+        quotationId: String(quotationId),
+        paymentLinkId: String(paymentLinkId),
+        zohoStatus: normalizeStatus(pl?.status),
+        amount: pl?.amount,
+        amount_paid: pl?.amount_paid,
+        observedStatuses: zohoPaymentCheck.statuses,
+        zohoPayload: pl,
+        dbUpdated: false,
+      });
+
       return res.json({
         success: true,
         updated: false,
+        gatewayPaid: false,
         zohoStatus: normalizeStatus(pl?.status) || 'unknown',
+        amount: pl?.amount,
+        amount_paid: pl?.amount_paid,
         observedStatuses: zohoPaymentCheck.statuses,
         message: zohoFailureCheck.failed
           ? 'Payment failed/cancelled in Zoho'
@@ -293,19 +319,38 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
       amount: Number.isFinite(amount) ? amount : undefined,
     });
 
-    const inquiryAfter = await Inquiry.findById(quotation.inquiryId).lean();
-    if (inquiryAfter) {
-      await syncInquiryWithQuotationPayment(inquiryAfter);
-    }
-
-    return res.json({
-      success: true,
-      updated: true,
+    logZohoPaymentEvent('sync', 'paid', {
       quotationId: String(quotationId),
+      paymentLinkId: String(paymentLinkId),
+      zohoStatus: normalizeStatus(pl?.status) || 'paid',
+      amount: pl?.amount,
+      amount_paid: pl?.amount_paid,
+      zohoPayload: pl,
+      dbUpdated: true,
+      syncMethod: 'api',
+    });
+
+    return finalizeSyncSuccess(res, quotationId, quotation, {
+      syncMethod: 'api',
+      zohoStatus: normalizeStatus(pl?.status) || 'paid',
     });
   } catch (error) {
     console.error('sync-payment-status error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+/** GET /api/zoho/auth-diagnostics — staff only: test CREATE vs READ OAuth scopes */
+router.get('/auth-diagnostics', authenticateToken, async (req, res) => {
+  const isStaff = ['admin', 'backoffice', 'subadmin'].includes(req.userRole);
+  if (!isStaff) {
+    return res.status(403).json({ success: false, message: 'Admin access required' });
+  }
+  try {
+    const result = await testZohoPaymentsAuth();
+    return res.json({ success: true, ...result });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e?.message || 'Diagnostics failed' });
   }
 });
 
@@ -318,8 +363,8 @@ router.post('/payment-link', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'quotationId is required' });
     }
 
-    const accessToken = process.env.ZOHO_PAYMENTS_ACCESS_TOKEN;
     const accountId = process.env.ZOHO_PAYMENTS_ACCOUNT_ID;
+    const accessToken = await getZohoAccessToken();
 
     if (!accessToken || !accountId) {
       return res.status(500).json({
@@ -376,20 +421,24 @@ router.post('/payment-link', authenticateToken, async (req, res) => {
     }
 
     // Zoho Payments accepts reference_id on the link; webhooks echo it as reference_id / payment_link_reference.
+    // Do not send reference_number — it is not part of the Payment Links create API and triggers 400 Invalid data.
     const reference_id = String(quotationId);
-    const reference_number = reference_id;
     const return_url = buildZohoReturnUrl(reference_id);
+
+    const customerEmail = inquiry.customer?.email ? String(inquiry.customer.email).trim() : '';
+    const { phone: zohoPhone, phone_country_code } = normalizePhoneForZohoPayments(
+      inquiry.customer?.phoneNumber
+    );
 
     const payload = {
       amount,
       currency: 'INR',
       description: `Payment for Quotation #${quotation.quotationNumber || quotationId}`,
       reference_id,
-      reference_number,
-      ...(inquiry.customer?.email ? { email: inquiry.customer.email } : {}),
-      ...(inquiry.customer?.phoneNumber ? { phone: inquiry.customer.phoneNumber } : {}),
+      ...(customerEmail ? { email: customerEmail } : {}),
+      ...(zohoPhone ? { phone: zohoPhone, ...(phone_country_code ? { phone_country_code } : {}) } : {}),
       ...(return_url ? { return_url } : {}),
-      notify_customer: { email: true }
+      ...(customerEmail ? { notify_customer: { email: true } } : {})
     };
 
     const zohoBase =
@@ -426,11 +475,7 @@ router.post('/payment-link', authenticateToken, async (req, res) => {
       }
     }
 
-    const paymentLink =
-      zohoResp.data?.payment_link ||
-      zohoResp.data?.paymentlink ||
-      zohoResp.data?.payment_links ||
-      zohoResp.data;
+    const paymentLink = extractZohoPaymentLinkPayload(zohoResp.data);
     const url = paymentLink?.url;
     const payment_link_id = paymentLink?.payment_link_id;
 
@@ -463,12 +508,15 @@ router.post('/payment-link', authenticateToken, async (req, res) => {
 
     return res.json({ success: true, url, payment_link_id });
   } catch (error) {
-    const status = error?.response?.status;
+    const zohoStatus = error?.response?.status;
     const data = error?.response?.data;
-    console.error('Zoho payment link error:', { status, data: data || error?.message || error });
-    return res.status(500).json({
+    console.error('Zoho payment link error:', { status: zohoStatus, data: data || error?.message || error });
+    const httpStatus =
+      zohoStatus === 400 || zohoStatus === 422 ? 400 : zohoStatus >= 400 && zohoStatus < 500 ? zohoStatus : 502;
+    return res.status(httpStatus).json({
       success: false,
-      message: data?.message || 'Failed to create payment link'
+      message: data?.message || error?.message || 'Failed to create payment link',
+      ...(process.env.NODE_ENV !== 'production' && data ? { zoho: data } : {})
     });
   }
 });

@@ -4,15 +4,19 @@ const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Quotation = require('../models/Quotation');
 const { applyPaymentSuccess, applyPaymentFailure } = require('../services/zohoPaymentSettlement');
+const { logZohoPaymentEvent } = require('../services/zohoPaymentLogger');
 
 const router = express.Router();
 
 const SUCCESS_EVENTS = new Set([
   'payment.success',
   'payment.succeeded',
+  'payment.capture',
+  'payment.captured',
   'payment_link.paid',
   'payment_link.success',
   'payment_link.payment_succeeded',
+  'payment_link.payment_success',
 ]);
 
 const FAILURE_EVENTS = new Set([
@@ -134,9 +138,11 @@ async function resolveQuotationId(payload, deep) {
   if (qid) return qid;
 
   if (deep.payment_link_id) {
-    const payDoc = await Payment.findOne({ transaction_id: String(deep.payment_link_id) })
-      .select('quotation')
-      .lean();
+    const linkId = String(deep.payment_link_id);
+    const byLink = await Quotation.findOne({ zohoPaymentLinkId: linkId }).select('_id').lean();
+    if (byLink?._id) return String(byLink._id);
+
+    const payDoc = await Payment.findOne({ transaction_id: linkId }).select('quotation').lean();
     if (payDoc?.quotation) return String(payDoc.quotation);
   }
 
@@ -208,16 +214,22 @@ router.post('/webhook', async (req, res) => {
       const isFailure = eventVariants(eventType).some((v) => FAILURE_EVENTS.has(v));
 
       if (!isSuccess && !isFailure) {
-        console.log('Zoho webhook ignored event type:', eventType || '[empty]');
+        logZohoPaymentEvent('webhook', 'ignored', {
+          eventType: eventType || '[empty]',
+          reference: deep.reference,
+          paymentLinkId: deep.payment_link_id,
+        });
         return;
       }
 
       const quotationId = await resolveQuotationId(payload, deep);
       if (!quotationId) {
-        console.warn('Zoho webhook: could not resolve quotation from payload', {
+        logZohoPaymentEvent('webhook', 'error', {
           eventType,
+          outcome: 'quotation_not_found',
           reference: deep.reference,
-          payment_link_id: deep.payment_link_id,
+          paymentLinkId: deep.payment_link_id,
+          zohoPayload: payload?.data || payload?.event_object,
         });
         return;
       }
@@ -236,9 +248,25 @@ router.post('/webhook', async (req, res) => {
           zoho_payment_id: deep.zoho_payment_id,
           amount,
         });
+        logZohoPaymentEvent('webhook', 'paid', {
+          quotationId,
+          paymentLinkId: deep.payment_link_id,
+          zohoPaymentId: deep.zoho_payment_id,
+          eventType,
+          amount,
+          zohoPayload: payload?.data || payload?.event_object,
+          dbUpdated: true,
+        });
       } else if (isFailure) {
         await applyPaymentFailure(quotationId, {
           payment_link_id: deep.payment_link_id,
+        });
+        logZohoPaymentEvent('webhook', 'failed', {
+          quotationId,
+          paymentLinkId: deep.payment_link_id,
+          eventType,
+          zohoPayload: payload?.data || payload?.event_object,
+          dbUpdated: true,
         });
       }
     } catch (err) {
