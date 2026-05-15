@@ -268,14 +268,25 @@ router.post('/', authenticateToken, [
         // Note: Order confirmation email will be sent separately when admin confirms the order
 
         // Create notification for customer about payment/order
+        const paymentCompleted = order.payment?.status === 'completed';
         try {
           const Notification = require('../models/Notification');
+          let customerTitle;
+          let customerMessage;
+          if (paymentMethod === 'cod') {
+            customerTitle = 'Order Created';
+            customerMessage = `Your order ${order.orderNumber} has been created. Payment will be collected on delivery.`;
+          } else if (paymentMethod === 'online' && !paymentCompleted) {
+            customerTitle = 'Complete Your Payment';
+            customerMessage = `Your order ${order.orderNumber} is ready. Complete payment via the Zoho link to confirm your order.`;
+          } else {
+            customerTitle = 'Payment Successful';
+            customerMessage = `Your payment of ₹${order.totalAmount} for order ${order.orderNumber} has been received successfully. Your order will be confirmed by our team shortly.`;
+          }
           await Notification.createNotification({
-            title: paymentMethod === 'cod' ? 'Order Created' : 'Payment Successful',
-            message: paymentMethod === 'cod' 
-              ? `Your order ${order.orderNumber} has been created. Payment will be collected on delivery.`
-              : `Your payment of ₹${order.totalAmount} for order ${order.orderNumber} has been received successfully. Your order will be confirmed by our team shortly.`,
-            type: 'success',
+            title: customerTitle,
+            message: customerMessage,
+            type: paymentCompleted || paymentMethod === 'cod' ? 'success' : 'info',
             userId: order.customer,
             relatedEntity: {
               type: 'order',
@@ -286,7 +297,7 @@ router.post('/', authenticateToken, [
               totalAmount: order.totalAmount,
               paymentMethod: paymentMethod,
               status: order.status,
-              confirmedAt: new Date()
+              confirmedAt: paymentCompleted ? new Date() : null
             }
           });
         } catch (notificationError) {
@@ -300,9 +311,17 @@ router.post('/', authenticateToken, [
           const adminUsers = await User.find({ role: { $in: ['admin', 'backoffice', 'subadmin'] } });
           
           for (const admin of adminUsers) {
+            const adminTitle =
+              paymentMethod === 'online' && !paymentCompleted
+                ? 'Order Awaiting Payment'
+                : 'Payment Received';
+            const adminMessage =
+              paymentMethod === 'online' && !paymentCompleted
+                ? `Order ${order.orderNumber} created; awaiting online payment from ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}.`
+                : `Payment of ₹${order.totalAmount} received for order ${order.orderNumber}. Customer: ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}. Payment method: ${paymentMethod}`;
             await Notification.createNotification({
-              title: 'Payment Received',
-              message: `Payment of ₹${order.totalAmount} received for order ${order.orderNumber}. Customer: ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}. Payment method: ${paymentMethod}`,
+              title: adminTitle,
+              message: adminMessage,
               type: 'success',
               userId: admin._id,
               relatedEntity: {

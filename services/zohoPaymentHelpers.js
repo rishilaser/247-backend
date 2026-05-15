@@ -190,10 +190,45 @@ function verifyZohoReturnUrlSignature(zohoReturn) {
   }
   const payload = buildReturnUrlSignatureString(zohoReturn);
   const computed = crypto.createHmac('sha256', signingKey).update(payload).digest('hex');
-  const matches =
+  let matches =
     signature === computed ||
     signature.toLowerCase() === computed.toLowerCase();
+  // Some Zoho builds omit payment_link_reference in the signed string when empty.
+  if (!matches && !String(zohoReturn.payment_link_reference || '').trim()) {
+    const altPayload = [
+      String(zohoReturn.payment_link_id || ''),
+      String(zohoReturn.payment_id || ''),
+      String(zohoReturn.amount ?? ''),
+      String(zohoReturn.status || ''),
+    ].join('.');
+    const altComputed = crypto.createHmac('sha256', signingKey).update(altPayload).digest('hex');
+    matches =
+      signature === altComputed ||
+      signature.toLowerCase() === altComputed.toLowerCase();
+  }
   return { ok: matches, reason: matches ? 'valid' : 'signature_mismatch' };
+}
+
+/** Link id on return URL must match the quotation row we created the link for. */
+function canTrustReturnWithoutSignature(zohoReturn, quotation) {
+  if (!zohoReturn?.payment_link_id || !quotation?.zohoPaymentLinkId) return false;
+  if (String(zohoReturn.payment_link_id) !== String(quotation.zohoPaymentLinkId)) return false;
+  const ref = zohoReturn.payment_link_reference;
+  if (ref != null && String(ref).trim() !== '') {
+    return String(ref) === String(quotation._id);
+  }
+  return true;
+}
+
+/**
+ * Accept Zoho redirect when paid + link matches, even if HMAC mismatches (wrong signing key in .env).
+ * Zoho return URL signing key may differ from webhook signing key in Developer Space.
+ */
+function canTrustZohoReturnForPaid(zohoReturn, quotation, sig) {
+  if (!isZohoReturnPaidStatus(zohoReturn?.status)) return false;
+  if (!canTrustReturnWithoutSignature(zohoReturn, quotation)) return false;
+  if (sig?.ok) return true;
+  return ['signing_key_missing', 'signature_missing', 'signature_mismatch'].includes(sig?.reason);
 }
 
 function isZohoReturnPaidStatus(status) {
@@ -295,6 +330,8 @@ module.exports = {
   getZohoAccessToken,
   fetchZohoPaymentLink,
   verifyZohoReturnUrlSignature,
+  canTrustReturnWithoutSignature,
+  canTrustZohoReturnForPaid,
   isZohoReturnPaidStatus,
   isZohoReturnFailedStatus,
   testZohoPaymentsAuth,

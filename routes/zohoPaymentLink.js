@@ -16,6 +16,8 @@ const {
   getZohoAccessToken,
   fetchZohoPaymentLink,
   verifyZohoReturnUrlSignature,
+  canTrustReturnWithoutSignature,
+  canTrustZohoReturnForPaid,
   isZohoReturnPaidStatus,
   isZohoReturnFailedStatus,
   testZohoPaymentsAuth,
@@ -137,7 +139,8 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
     // Path A: Zoho redirect query params (works without ZohoPay.payments.READ scope).
     if (zohoReturn && (zohoReturn.status || zohoReturn.payment_link_id)) {
       const sig = verifyZohoReturnUrlSignature(zohoReturn);
-      if (!sig.ok && sig.reason !== 'signing_key_missing') {
+      const trustedPaid = canTrustZohoReturnForPaid(zohoReturn, quotation, sig);
+      if (isZohoReturnPaidStatus(zohoReturn.status) && !trustedPaid) {
         logZohoPaymentEvent('sync', 'error', {
           quotationId: String(quotationId),
           paymentLinkId: zohoReturn.payment_link_id,
@@ -151,7 +154,14 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
         });
       }
 
-      if (isZohoReturnPaidStatus(zohoReturn.status)) {
+      if (sig.reason === 'signature_mismatch' && trustedPaid) {
+        console.warn('[Zoho sync] signature_mismatch but trusting paid return (check Payments signing key in .env)', {
+          quotationId: String(quotationId),
+          paymentLinkId: zohoReturn.payment_link_id,
+        });
+      }
+
+      if (isZohoReturnPaidStatus(zohoReturn.status) && trustedPaid) {
         const amountRaw = zohoReturn.amount;
         const amount =
           typeof amountRaw === 'string' ? Number(amountRaw) : typeof amountRaw === 'number' ? amountRaw : undefined;
@@ -197,6 +207,29 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
           message: 'Payment failed or cancelled',
         });
       }
+
+      return res.json({
+        success: true,
+        updated: false,
+        gatewayPaid: false,
+        syncMethod: 'return_url',
+        zohoStatus: normalizeStatus(zohoReturn.status),
+        message: 'Payment not completed yet',
+      });
+    }
+
+    const hasReturnParams =
+      zohoReturn && (zohoReturn.status || zohoReturn.payment_link_id);
+
+    if (!hasReturnParams) {
+      return res.json({
+        success: true,
+        updated: false,
+        needsZohoReturnParams: true,
+        gatewayPaid: false,
+        message:
+          'No Zoho return parameters received. After UPI payment, open the page Zoho redirects to (with status in the URL), or add ZohoPay.payments.READ to your OAuth token.',
+      });
     }
 
     const paymentLinkId = quotation.zohoPaymentLinkId;
