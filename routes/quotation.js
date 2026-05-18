@@ -940,6 +940,8 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
       totalAmount: quotation.totalAmount
     });
 
+    const previousQuotationStatus = quotation.status;
+
     // Update quotation status to 'sent'
     quotation.status = 'sent';
     quotation.sentAt = new Date();
@@ -967,6 +969,10 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
           console.error('Quotation not found for email dispatch:', id);
           return;
         }
+
+        const { notifyQuotationStatusChange } = require('../services/statusNotificationService');
+        await notifyQuotationStatusChange(freshQuotation, previousQuotationStatus, 'sent');
+
         console.log('📧 Sending quotation email to customer (Quotations tab → Send)...');
         console.log('Customer Email:', freshQuotation.customerInfo?.email);
         console.log('Quotation Number:', freshQuotation.quotationNumber);
@@ -1099,6 +1105,9 @@ router.post('/:id/response', authenticateToken, async (req, res) => {
       });
     }
 
+    const previousQuotationStatus = quotation.status;
+    const previousInquiryStatus = inquiry.status;
+
     // Update quotation status based on response
     if (response === 'accepted') {
       quotation.status = 'accepted';
@@ -1123,6 +1132,15 @@ router.post('/:id/response', authenticateToken, async (req, res) => {
       inquiry.status = 'rejected';
     }
     await inquiry.save();
+
+    const {
+      notifyQuotationStatusChange,
+      notifyInquiryStatusChange,
+    } = require('../services/statusNotificationService');
+    await notifyQuotationStatusChange(quotation, previousQuotationStatus, quotation.status, {
+      customerId: userId,
+    });
+    await notifyInquiryStatusChange(inquiry, previousInquiryStatus, inquiry.status);
 
     console.log('Quotation response processed successfully');
 

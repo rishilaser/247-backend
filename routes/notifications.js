@@ -42,6 +42,15 @@ const mockNotifications = [
 // Get user notifications
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    if (req.userRole === 'customer') {
+      try {
+        const { backfillPaidPaymentNotificationsForUser } = require('../services/paymentNotificationHelper');
+        await backfillPaidPaymentNotificationsForUser(req.userId);
+      } catch (backfillErr) {
+        console.warn('Payment notification backfill:', backfillErr.message);
+      }
+    }
+
     const notifications = await Notification.getUserNotifications(req.userId, 50);
     
     res.json({

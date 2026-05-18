@@ -287,25 +287,16 @@ router.post('/:orderId/delivered', authenticateToken, requireBackOffice, [
       console.error('Delivery confirmation SMS failed:', smsError);
     }
 
-    // Create notification for customer about delivery confirmation
     try {
-      const Notification = require('../models/Notification');
-      await Notification.createNotification({
-        title: 'Order Delivered',
-        message: `Your order ${order.orderNumber} has been delivered successfully! Thank you for choosing Komacut. We hope you're satisfied with your sheet metal parts.`,
-        type: 'success',
-        userId: order.customer._id,
-        relatedEntity: {
-          type: 'order',
-          entityId: order._id
-        },
-        metadata: {
-          orderNumber: order.orderNumber,
-          actualDelivery: order.dispatch.actualDelivery,
-          status: order.status,
-          deliveredAt: new Date()
-        }
-      });
+      const populated = await Order.findById(order._id).populate('customer', '_id').lean();
+      if (populated?.customer) {
+        const { notifyOrderStatusChange } = require('../services/statusNotificationService');
+        await notifyOrderStatusChange(
+          { _id: order._id, orderNumber: order.orderNumber, customer: populated.customer },
+          'dispatched',
+          'delivered'
+        );
+      }
     } catch (notificationError) {
       console.error('Failed to create delivery confirmation notification:', notificationError);
     }

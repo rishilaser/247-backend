@@ -5,6 +5,7 @@ const Quotation = require('../models/Quotation');
 const Inquiry = require('../models/Inquiry');
 const Payment = require('../models/Payment');
 const { applyPaymentSuccess, applyPaymentFailure } = require('../services/zohoPaymentSettlement');
+const { ensurePaymentSuccessNotifications } = require('../services/paymentNotificationHelper');
 const { syncInquiryWithQuotationPayment } = require('../services/inquiryPaymentSyncHelper');
 const { ensurePendingOnlineOrder } = require('../services/ensurePendingOrder');
 const {
@@ -221,22 +222,31 @@ router.post('/sync-payment-status', authenticateToken, async (req, res) => {
     const hasReturnParams =
       zohoReturn && (zohoReturn.status || zohoReturn.payment_link_id);
 
-    if (!hasReturnParams) {
+    if (
+      !hasReturnParams &&
+      quotation.orderPaymentWorkflowStatus === 'Paid' &&
+      quotation.payment_status === 'Success'
+    ) {
+      await ensurePaymentSuccessNotifications(String(quotationId), {});
+      return res.json({
+        success: true,
+        updated: false,
+        gatewayPaid: true,
+        notificationsEnsured: true,
+        orderPaymentWorkflowStatus: quotation.orderPaymentWorkflowStatus,
+        payment_status: quotation.payment_status,
+      });
+    }
+
+    const paymentLinkId = quotation.zohoPaymentLinkId;
+    if (!paymentLinkId) {
       return res.json({
         success: true,
         updated: false,
         needsZohoReturnParams: true,
         gatewayPaid: false,
         message:
-          'No Zoho return parameters received. After UPI payment, open the page Zoho redirects to (with status in the URL), or add ZohoPay.payments.READ to your OAuth token.',
-      });
-    }
-
-    const paymentLinkId = quotation.zohoPaymentLinkId;
-    if (!paymentLinkId) {
-      return res.status(400).json({
-        success: false,
-        message: 'No Zoho payment link on this quotation; create a payment link first',
+          'No Zoho payment link on this quotation. Complete checkout from the quotation payment page first.',
       });
     }
 
@@ -456,7 +466,11 @@ router.post('/payment-link', authenticateToken, async (req, res) => {
     // Zoho Payments accepts reference_id on the link; webhooks echo it as reference_id / payment_link_reference.
     // Do not send reference_number — it is not part of the Payment Links create API and triggers 400 Invalid data.
     const reference_id = String(quotationId);
-    const return_url = buildZohoReturnUrl(reference_id);
+    let return_url = buildZohoReturnUrl(reference_id);
+    if (return_url && !return_url.includes('payment-success') && !return_url.includes('orderId=')) {
+      const base = (process.env.CLIENT_URL || 'https://247cutbend.in').trim().replace(/\/+$/, '');
+      return_url = `${base}/payment-success?orderId=${encodeURIComponent(reference_id)}`;
+    }
 
     const customerEmail = inquiry.customer?.email ? String(inquiry.customer.email).trim() : '';
     const { phone: zohoPhone, phone_country_code } = normalizePhoneForZohoPayments(

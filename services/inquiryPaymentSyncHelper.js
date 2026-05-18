@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Inquiry = require('../models/Inquiry');
 const Quotation = require('../models/Quotation');
+const { notifyInquiryStatusChange } = require('./statusNotificationService');
 
 const STATUSES_SYNC_TO_PAYMENT_RECEIVED = new Set([
   'pending',
@@ -67,11 +68,21 @@ async function syncInquiryWithQuotationPayment(inquiryLean) {
     inquiryLean.status &&
     STATUSES_SYNC_TO_PAYMENT_RECEIVED.has(inquiryLean.status)
   ) {
+    const oldStatus = inquiryLean.status;
     await Inquiry.updateOne(
       { _id: inquiryLean._id },
       { $set: { status: 'payment_received', updatedAt: new Date() } }
     );
     inquiryLean.status = 'payment_received';
+    await notifyInquiryStatusChange(
+      {
+        _id: inquiryLean._id,
+        inquiryNumber: inquiryLean.inquiryNumber,
+        customer: inquiryLean.customer,
+      },
+      oldStatus,
+      'payment_received'
+    );
   }
 
   return inquiryLean;

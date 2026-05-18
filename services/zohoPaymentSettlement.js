@@ -3,6 +3,7 @@ const Payment = require('../models/Payment');
 const Quotation = require('../models/Quotation');
 const Order = require('../models/Order');
 const { markInquiryPaymentReceivedForQuotation } = require('./inquiryPaymentStatusHelper');
+const { ensurePaymentSuccessNotifications } = require('./paymentNotificationHelper');
 
 /**
  * Persist successful Zoho payment (used by webhook and post-redirect API verification).
@@ -19,6 +20,7 @@ async function applyPaymentSuccess(quotationId, opts) {
 
   if (q.orderPaymentWorkflowStatus === 'Paid' && q.payment_status === 'Success') {
     console.log('Zoho payment: duplicate success (idempotent)', quotationId);
+    await ensurePaymentSuccessNotifications(quotationId, opts);
     return { ok: true, duplicate: true };
   }
 
@@ -92,6 +94,8 @@ async function applyPaymentSuccess(quotationId, opts) {
 
   const refreshed = await Quotation.findById(quotationId).lean();
   await markInquiryPaymentReceivedForQuotation(refreshed || q);
+
+  await ensurePaymentSuccessNotifications(quotationId, opts);
 
   console.log('Zoho payment: quotation marked Paid', { quotationId, txnId });
 

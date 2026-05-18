@@ -656,31 +656,14 @@ router.put('/:id/status', authenticateToken, requireBackOffice, [
 
         // Note: Delivery time notification email removed - customer will only receive email when order is dispatched
 
-        // Create notification for customer if status changed to dispatched
-        // Note: Dispatch notifications are handled in dispatch.js to avoid duplicates
-        if (status === 'dispatched' && oldStatus !== 'dispatched') {
-          try {
-            const Notification = require('../models/Notification');
-            // Only create notification if dispatch details are not available (manual status update)
-            if (!order.dispatch || !order.dispatch.trackingNumber) {
-              await Notification.createNotification({
-                title: 'Order Dispatched',
-                message: `Your order ${order.orderNumber} has been dispatched! We will update you with tracking details soon.`,
-                type: 'success',
-                userId: order.customer._id,
-                relatedEntity: {
-                  type: 'order',
-                  entityId: order._id
-                },
-                metadata: {
-                  orderNumber: order.orderNumber,
-                  dispatchedAt: new Date()
-                }
-              });
-            }
-          } catch (notificationError) {
-            console.error('Failed to create dispatch notification:', notificationError);
-          }
+        try {
+          const { notifyOrderStatusChange } = require('../services/statusNotificationService');
+          await notifyOrderStatusChange(order, oldStatus, status, {
+            trackingNumber: order.dispatch?.trackingNumber,
+            courier: order.dispatch?.courier,
+          });
+        } catch (notificationError) {
+          console.error('Failed to create order status notification:', notificationError);
         }
       } catch (error) {
         console.error('Error in async order status update tasks:', error);

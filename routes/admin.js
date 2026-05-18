@@ -280,6 +280,16 @@ router.put('/orders/:id/status', authenticateToken, requireBackOffice, [
 
         // Note: Order ready email removed - customer will only receive email when order is dispatched
 
+        try {
+          const { notifyOrderStatusChange } = require('../services/statusNotificationService');
+          await notifyOrderStatusChange(updatedOrder, oldStatus, status, {
+            trackingNumber: updatedOrder.dispatch?.trackingNumber,
+            courier: updatedOrder.dispatch?.courier,
+          });
+        } catch (notificationError) {
+          console.error('Failed to create order status notification:', notificationError);
+        }
+
         // Send dispatch notification email to customer when admin dispatches the order
         if (status === 'dispatched' && oldStatus !== 'dispatched') {
           try {

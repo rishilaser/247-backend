@@ -72,6 +72,17 @@ async function ensurePendingOnlineOrder(quotation, inquiry, customerId) {
 
   await order.save();
 
+  try {
+    const { notifyOrderAwaitingPayment } = require('./statusNotificationService');
+    await notifyOrderAwaitingPayment({
+      _id: order._id,
+      orderNumber: order.orderNumber,
+      customer: customerId,
+    });
+  } catch (notifyErr) {
+    console.error('Awaiting payment notification failed:', notifyErr.message);
+  }
+
   // Keep quotation as "accepted" until gateway confirms payment success.
   // This prevents false "Paid" display on simple redirect/return from checkout.
   quotation.order = order._id;
