@@ -1964,8 +1964,9 @@ router.get('/:id/files/download-all', authenticateToken, async (req, res) => {
 
     // Set response headers
     const zipFilename = `${inquiry.inquiryNumber || inquiry._id}_files.zip`;
+    const { buildAttachmentContentDisposition } = require('../utils/contentDisposition');
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    res.setHeader('Content-Disposition', buildAttachmentContentDisposition(zipFilename));
 
     // Create archiver instance
     const archive = archiver('zip', {
