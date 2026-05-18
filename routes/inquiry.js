@@ -20,6 +20,11 @@ const { requireBackOffice } = require('../middleware/auth');
 const websocketService = require('../services/websocketService');
 const archiver = require('archiver');
 const axios = require('axios');
+const {
+  resolveInquiryFileName,
+  resolveInquiryFileNameWithCloudinary,
+  uniquifyZipEntryNames,
+} = require('../utils/inquiryFileName');
 
 const router = express.Router();
 
@@ -359,8 +364,8 @@ router.post('/', authenticateToken, upload.array('files'), handleMulterErrors, [
           );
           
           return {
-            originalName: file.originalname,
-            fileName: file.originalname, // Use original name
+            originalName: cloudinaryResult.originalName || file.originalname,
+            fileName: cloudinaryResult.originalName || file.originalname,
             filePath: cloudinaryResult.url, // Cloudinary URL
             fileSize: file.buffer.length,
             fileType: fileExtension,
@@ -1345,7 +1350,8 @@ router.get('/:id/files/:filename/download', authenticateToken, async (req, res) 
       });
     }
 
-    console.log('File found:', file.originalName);
+    const downloadFileName = await resolveInquiryFileNameWithCloudinary(file);
+    console.log('File found:', downloadFileName);
     console.log('File has fileData:', !!file.fileData);
     console.log('File fileData type:', file.fileData ? typeof file.fileData : 'null');
     console.log('File fileData is Buffer:', file.fileData ? Buffer.isBuffer(file.fileData) : false);
@@ -1429,7 +1435,11 @@ router.get('/:id/files/:filename/download', authenticateToken, async (req, res) 
     const contentType = file.fileType || 'application/octet-stream';
     
     // Set appropriate headers and send file
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
+    const asciiName = downloadFileName.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, "'");
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(downloadFileName)}`
+    );
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Length', fileBuffer.length);
     
@@ -1517,9 +1527,10 @@ router.post('/:id/upload', authenticateToken, upload.array('files'), handleMulte
           }
           
           // Store file data with Cloudinary URL
+          const storedName = cloudinaryResult.originalName || file.originalname;
           const fileData = {
-            originalName: file.originalname,
-            fileName: file.filename,
+            originalName: storedName,
+            fileName: storedName,
             filePath: cloudinaryResult.url, // Store Cloudinary URL
             fileSize: file.size,
             fileType: fileType,
@@ -1545,7 +1556,7 @@ router.post('/:id/upload', authenticateToken, upload.array('files'), handleMulte
           
           const fileData = {
             originalName: file.originalname,
-            fileName: file.filename,
+            fileName: file.originalname,
             filePath: file.path,
             fileSize: file.size,
             fileType: fileType,
@@ -1594,7 +1605,7 @@ router.post('/:id/upload', authenticateToken, upload.array('files'), handleMulte
 
         const fileData = {
           originalName: file.originalname,
-          fileName: file.filename,
+          fileName: file.originalname,
           filePath: file.path, // Keep for backward compatibility
           fileSize: file.size,
           fileType: file.mimetype,
@@ -1929,16 +1940,19 @@ router.get('/:id/files/download-all', authenticateToken, async (req, res) => {
       }
       
       if (fileBuffer && fileBuffer.length > 0) {
+        const downloadName = await resolveInquiryFileNameWithCloudinary(file);
         filesWithBuffers.push({
-          ...file,
-          buffer: fileBuffer
+          buffer: fileBuffer,
+          downloadName,
         });
       } else {
-        console.log(`⚠️  Skipping file (no buffer available): ${file.originalName}`);
+        console.log(`⚠️  Skipping file (no buffer available): ${resolveInquiryFileName(file)}`);
       }
     }
 
-    if (filesWithBuffers.length === 0) {
+    const zipEntries = uniquifyZipEntryNames(filesWithBuffers);
+
+    if (zipEntries.length === 0) {
       console.log('No files found in database or filesystem');
       return res.status(404).json({
         success: false,
@@ -1946,7 +1960,7 @@ router.get('/:id/files/download-all', authenticateToken, async (req, res) => {
       });
     }
 
-    console.log(`Creating ZIP with ${filesWithBuffers.length} files...`);
+    console.log(`Creating ZIP with ${zipEntries.length} files...`);
 
     // Set response headers
     const zipFilename = `${inquiry.inquiryNumber || inquiry._id}_files.zip`;
@@ -1988,9 +2002,9 @@ router.get('/:id/files/download-all', authenticateToken, async (req, res) => {
     archive.pipe(res);
 
     // Add files to archive from buffers
-    filesWithBuffers.forEach((file, index) => {
-      console.log(`Adding file ${index + 1}/${filesWithBuffers.length}: ${file.originalName} (${file.buffer.length} bytes)`);
-      archive.append(file.buffer, { name: file.originalName });
+    zipEntries.forEach((file, index) => {
+      console.log(`Adding file ${index + 1}/${zipEntries.length}: ${file.downloadName} (${file.buffer.length} bytes)`);
+      archive.append(file.buffer, { name: file.downloadName });
     });
 
     // Finalize the archive

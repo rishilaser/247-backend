@@ -5,9 +5,26 @@ const path = require('path');
 const fs = require('fs');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
-const { sendQuotationEmail, sendQuotationSentEmail } = require('../services/emailService');
-const { sendSMS } = require('../services/smsService');
+const { sendQuotationSentEmail } = require('../services/emailService');
 const pdfService = require('../services/pdfService');
+
+const ADMIN_ROLES = ['admin', 'backoffice', 'subadmin'];
+
+/** Customer email/SMS — only from POST /api/quotation/:id/send (Quotations tab → Send). */
+const dispatchQuotationToCustomer = async (quotation) => {
+  let inquiryNumber = null;
+  try {
+    const inquiry = await Inquiry.findById(quotation.inquiryId).select('inquiryNumber').lean();
+    if (inquiry) {
+      inquiryNumber = inquiry.inquiryNumber;
+    }
+  } catch (inquiryError) {
+    console.warn('Could not fetch inquiry number for quotation email:', inquiryError.message);
+  }
+
+  const quotationForEmail = quotation.toObject ? quotation.toObject() : quotation;
+  await sendQuotationSentEmail(quotationForEmail, inquiryNumber);
+};
 const Quotation = require('../models/Quotation');
 const Inquiry = require('../models/Inquiry');
 // ✅ CLOUDINARY: No local uploads directory needed - all files go to Cloudinary
@@ -290,43 +307,14 @@ router.post('/create', [
       // Don't fail the request if inquiry update fails
     }
 
-    // Send email to customer asynchronously (don't wait for it)
-    if (quotationData.customerInfo.email && quotationData.customerInfo.email !== 'customer@example.com') {
-      console.log('📧 Sending quotation email asynchronously...');
-      // Fire and forget - don't await
-      setImmediate(async () => {
-        try {
-          await sendQuotationEmail(savedQuotation);
-          console.log('✅ Quotation email sent successfully');
-        } catch (emailError) {
-          console.error('❌ Email sending failed:', emailError);
-        }
-      });
-    }
+    console.log('📧 Quotation saved as draft — customer email NOT sent (use Quotations tab → Send)');
 
-    // Send SMS to customer asynchronously (don't wait for it)
-    if (quotationData.customerInfo.phone && quotationData.customerInfo.phone !== '+1234567890') {
-      console.log('📱 Sending SMS asynchronously...');
-      // Fire and forget - don't await
-      setImmediate(async () => {
-        try {
-          await sendSMS(
-            quotationData.customerInfo.phone,
-            `Your quotation for inquiry ${inquiry.inquiryNumber} has been prepared. Total amount: ₹${totalAmount}. Please check your email for details.`
-          );
-          console.log('✅ SMS sent successfully');
-        } catch (smsError) {
-          console.error('❌ SMS sending failed:', smsError);
-        }
-      });
-    }
-
-    // Create notification for customer
+    // Create notification for customer (in-app only; email is sent on POST /:id/send)
     try {
       const Notification = require('../models/Notification');
       await Notification.createNotification({
-        title: 'Quotation Created',
-        message: `Your quotation ${savedQuotation.quotationNumber} has been prepared for inquiry ${inquiry.inquiryNumber}. Total amount: ₹${totalAmount}. Please review and accept.`,
+        title: 'Quotation in preparation',
+        message: `Quotation ${savedQuotation.quotationNumber} is being prepared for inquiry ${inquiry.inquiryNumber}. You will receive an email when it is sent to you.`,
         type: 'info',
         userId: inquiry.customer._id,
         relatedEntity: {
@@ -356,7 +344,7 @@ router.post('/create', [
 
     res.json({
       success: true,
-      message: 'Quotation created and sent successfully',
+      message: 'Quotation saved as draft. Send it from the Quotations tab to email the customer.',
       quotation: savedQuotation
     });
 
@@ -532,9 +520,11 @@ router.post('/upload', [
     });
 
     // Return response immediately for fast API response
+    console.log('📧 Quotation uploaded as draft — customer email NOT sent (use Quotations tab → Send)');
+
     res.json({
       success: true,
-      message: 'Quotation uploaded successfully',
+      message: 'Quotation uploaded as draft. Send it from the Quotations tab to email the customer.',
       quotation: savedQuotation,
       pdfStorage: 'cloudinary',
       cloudinaryUrl: null // Will be updated in background
@@ -585,8 +575,8 @@ router.post('/upload', [
         const inquiry = await Inquiry.findById(inquiryId).lean().populate('customer', '_id').select('inquiryNumber customer');
         if (inquiry && inquiry.customer) {
           await Notification.createNotification({
-            title: 'Quotation Uploaded',
-            message: `Your quotation ${savedQuotation.quotationNumber} has been uploaded for inquiry ${inquiry.inquiryNumber || inquiryId}. Total amount: ₹${totalAmount}.`,
+            title: 'Quotation in preparation',
+            message: `Quotation ${savedQuotation.quotationNumber} is being prepared for inquiry ${inquiry.inquiryNumber || inquiryId}. You will receive an email when it is sent to you.`,
             type: 'info',
             userId: inquiry.customer._id,
             relatedEntity: {
@@ -599,31 +589,6 @@ router.post('/upload', [
         console.error('Failed to create notification:', notificationError);
       }
     });
-
-    // Send email to customer asynchronously when quotation file is uploaded
-    if (parsedCustomerInfo.email && parsedCustomerInfo.email !== 'customer@example.com') {
-      console.log('📧 Sending quotation upload email asynchronously...');
-      // Store file buffer and filename for email attachment (before async operation)
-      const pdfBufferForEmail = fileBuffer;
-      const pdfFileNameForEmail = fileName;
-      
-      setImmediate(async () => {
-        try {
-          // Populate quotation with inquiry number for email
-          const inquiryForEmail = await Inquiry.findById(inquiryId).select('inquiryNumber').lean();
-          const inquiryNumber = inquiryForEmail?.inquiryNumber || null;
-          
-          // Fetch the saved quotation with all details for email
-          const quotationForEmail = await Quotation.findById(savedQuotation._id).lean();
-          
-          // Pass PDF buffer and filename to email function for attachment
-          await sendQuotationSentEmail(quotationForEmail, inquiryNumber, pdfBufferForEmail, pdfFileNameForEmail);
-          console.log('✅ Quotation upload email sent successfully with PDF attachment');
-        } catch (emailError) {
-          console.error('❌ Email sending failed:', emailError);
-        }
-      });
-    }
 
   } catch (error) {
     console.error('Quotation upload error:', error);
@@ -951,6 +916,13 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
     const { id } = req.params;
     console.log('Quotation ID:', id);
 
+    if (!ADMIN_ROLES.includes(req.userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only admin users can send quotations to customers.'
+      });
+    }
+
     // Find the quotation
     const quotation = await Quotation.findById(id);
     if (!quotation) {
@@ -987,54 +959,23 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
       quotation: quotation
     });
 
-    // Send email and SMS asynchronously in the background (non-blocking)
+    // Email/SMS only when admin clicks Send — never on create/upload
     setImmediate(async () => {
       try {
-        // Get inquiry number for email
-        let inquiryNumber = null;
-        try {
-          const inquiry = await Inquiry.findById(quotation.inquiryId).select('inquiryNumber').lean();
-          if (inquiry) {
-            inquiryNumber = inquiry.inquiryNumber;
-          }
-        } catch (inquiryError) {
-          console.warn('Could not fetch inquiry number:', inquiryError.message);
+        const freshQuotation = await Quotation.findById(id);
+        if (!freshQuotation) {
+          console.error('Quotation not found for email dispatch:', id);
+          return;
         }
-
-        // Send email to customer using proper email service
-        try {
-          console.log('📧 Sending quotation email to customer...');
-          console.log('Customer Email:', quotation.customerInfo?.email);
-          console.log('Quotation Number:', quotation.quotationNumber);
-          await sendQuotationSentEmail(quotation, inquiryNumber);
-          console.log('✅ Quotation email sent successfully to customer:', quotation.customerInfo?.email);
-        } catch (emailError) {
-          console.error('❌ Quotation email sending failed:', emailError.message);
-          console.error('Error details:', emailError);
-          // Don't fail the request if email fails, but log the error
-        }
-
-        // Send SMS to customer
-        try {
-          console.log('Attempting to send SMS...');
-          console.log('Customer phone:', quotation.customerInfo.phone);
-          if (quotation.customerInfo.phone) {
-            const smsResult = await sendSMS(
-              quotation.customerInfo.phone,
-              `Your quotation ${quotation.quotationNumber} has been sent. Total amount: ₹${quotation.totalAmount}. Please check your email for details.`
-            );
-            console.log('SMS result:', smsResult);
-          } else {
-            console.log('No customer phone number available for SMS');
-          }
-        } catch (smsError) {
-          console.error('SMS sending failed:', smsError);
-          // Don't fail the request if SMS fails
-        }
-
+        console.log('📧 Sending quotation email to customer (Quotations tab → Send)...');
+        console.log('Customer Email:', freshQuotation.customerInfo?.email);
+        console.log('Quotation Number:', freshQuotation.quotationNumber);
+        await dispatchQuotationToCustomer(freshQuotation);
+        console.log('✅ Quotation sent email delivered to:', freshQuotation.customerInfo?.email);
         console.log('=== SEND QUOTATION BACKGROUND TASKS COMPLETE ===');
       } catch (backgroundError) {
-        console.error('Background task error:', backgroundError);
+        console.error('❌ Quotation send email/SMS failed:', backgroundError.message);
+        console.error('Error details:', backgroundError);
       }
     });
 

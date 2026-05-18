@@ -1,5 +1,6 @@
 const cloudinary = require('../config/cloudinary');
 const fs = require('fs');
+const { buildStoredOriginalName } = require('../utils/inquiryFileName');
 
 /**
  * Upload file to Cloudinary (supports all file types: PDF, DWG, DXF, ZIP, XLSX, XLS, etc.)
@@ -65,13 +66,15 @@ const uploadFileToCloudinary = async (fileData, originalName, folder = 'uploads'
     console.log('   Format:', result.format || fileExtension);
     console.log('   Size:', (result.bytes / 1024 / 1024).toFixed(2), 'MB\n');
 
+    const storedOriginalName = buildStoredOriginalName(result, originalName);
+
     return {
       success: true,
       url: result.secure_url,
       public_id: result.public_id,
       bytes: result.bytes,
       format: result.format,
-      originalName: originalName
+      originalName: storedOriginalName,
     };
 
   } catch (error) {

@@ -4,6 +4,10 @@ const path = require('path');
 const xlsx = require('xlsx');
 const axios = require('axios');
 const archiver = require('archiver');
+const {
+  resolveInquiryFileNameWithCloudinary,
+  uniquifyZipEntryNames,
+} = require('../utils/inquiryFileName');
 
 /** Calendar year for email footers (evaluated when each email HTML is built). */
 const getEmailCopyrightYear = () => new Date().getFullYear();
@@ -478,10 +482,10 @@ const sendInquiryNotification = async (inquiry) => {
             continue; // Skip this file
           }
           
-          // Store file for ZIP creation only (not attaching individually)
+          const downloadName = await resolveInquiryFileNameWithCloudinary(file);
           filesForZip.push({
-            name: file.originalName || file.fileName || 'file',
-            buffer: fileBuffer
+            name: downloadName,
+            buffer: fileBuffer,
           });
           
           console.log(`✅ File prepared for ZIP: ${file.originalName} (${(fileBuffer.length / 1024).toFixed(2)} KB)`);
@@ -521,9 +525,11 @@ const sendInquiryNotification = async (inquiry) => {
             reject(err);
           });
           
-          // Add all files to ZIP
-          filesForZip.forEach(file => {
-            archive.append(file.buffer, { name: file.name });
+          const zipEntries = uniquifyZipEntryNames(
+            filesForZip.map((file) => ({ downloadName: file.name, buffer: file.buffer }))
+          );
+          zipEntries.forEach((file) => {
+            archive.append(file.buffer, { name: file.downloadName });
           });
           
           // Finalize the archive
@@ -1005,7 +1011,8 @@ const sendQuotationSentEmail = async (quotation, inquiryNumber = null, pdfBuffer
   }
 };
 
-// Send quotation email to customer
+// @deprecated Do not use — customer quotation email must go through sendQuotationSentEmail
+// only from POST /api/quotation/:id/send (admin Quotations tab → Send).
 const sendQuotationEmail = async (quotation) => {
   try {
     const transporter = createTransporter();
