@@ -28,6 +28,18 @@ const userSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  gstNumber: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    validate: {
+      validator(value) {
+        if (!value) return true;
+        return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(value);
+      },
+      message: 'Invalid GSTIN format'
+    }
+  },
   department: {
     type: String,
     required: true,

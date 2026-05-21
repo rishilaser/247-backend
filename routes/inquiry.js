@@ -578,7 +578,7 @@ router.post('/', authenticateToken, upload.array('files'), handleMulterErrors, [
     setImmediate(async () => {
       try {
         // Populate customer data for notification (async)
-        await inquiry.populate('customer', 'firstName lastName email companyName phoneNumber');
+        await inquiry.populate('customer', 'firstName lastName email companyName phoneNumber gstNumber');
         
         // Send confirmation email to customer (async)
         try {
@@ -975,7 +975,7 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
       inquiry = await Inquiry.findOne({
         _id: id
       })
-      .populate('customer', 'firstName lastName companyName email phoneNumber')
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
       .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -987,7 +987,7 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
       inquiry = await Inquiry.findOne({
         inquiryNumber: id
       })
-      .populate('customer', 'firstName lastName companyName email phoneNumber')
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
       .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1191,7 +1191,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         inquiry = await Inquiry.findOne({
           _id: id
         })
-        .populate('customer', 'firstName lastName companyName email phoneNumber')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1204,7 +1204,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
           _id: id,
           customer: req.userId
         })
-        .populate('customer', 'firstName lastName companyName')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1219,7 +1219,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         inquiry = await Inquiry.findOne({
           inquiryNumber: id
         })
-        .populate('customer', 'firstName lastName companyName email phoneNumber')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1232,7 +1232,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
           inquiryNumber: id,
           customer: req.userId
         })
-        .populate('customer', 'firstName lastName companyName')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1308,7 +1308,7 @@ router.get('/:id/files/:filename/download', authenticateToken, async (req, res) 
         _id: id
       })
       .lean() // Get raw MongoDB document, bypass toJSON
-      .populate('customer', 'firstName lastName companyName');
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber');
     } else {
       // Regular users can only access their own inquiries
       inquiry = await Inquiry.findOne({
@@ -1316,7 +1316,7 @@ router.get('/:id/files/:filename/download', authenticateToken, async (req, res) 
         customer: req.userId
       })
       .lean() // Get raw MongoDB document, bypass toJSON
-      .populate('customer', 'firstName lastName companyName');
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber');
     }
 
     if (!inquiry) {
@@ -1839,7 +1839,7 @@ router.get('/:id/files/download-all', authenticateToken, async (req, res) => {
         _id: id
       })
       .lean() // Get raw MongoDB document, bypass toJSON
-      .populate('customer', 'firstName lastName companyName');
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber');
     } else {
       // Regular users can only access their own inquiries
       inquiry = await Inquiry.findOne({
@@ -1847,7 +1847,7 @@ router.get('/:id/files/download-all', authenticateToken, async (req, res) => {
         customer: req.userId
       })
       .lean() // Get raw MongoDB document, bypass toJSON
-      .populate('customer', 'firstName lastName companyName');
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber');
     }
 
     if (!inquiry) {

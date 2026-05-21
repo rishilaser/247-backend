@@ -76,6 +76,11 @@ router.post('/signup', [
   body('lastName').trim().isLength({ min: 1 }),
   body('phoneNumber').trim().isLength({ min: 10 }),
   body('companyName').trim().isLength({ min: 2 }),
+  body('gstNumber')
+    .trim()
+    .toUpperCase()
+    .matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/)
+    .withMessage('Invalid GSTIN format'),
   body('department').isIn(['Engineering', 'Procurement', 'Design', 'Manufacturing', 'Quality Control', 'Other']),
   body('country').trim().isLength({ min: 2 }),
   body('address.street').optional().trim(),
@@ -96,7 +101,7 @@ router.post('/signup', [
       });
     }
 
-    const { email, firstName, lastName, phoneNumber, companyName, department, country, address, password } = req.body;
+    const { email, firstName, lastName, phoneNumber, companyName, gstNumber, department, country, address, password } = req.body;
 
     console.log('=== SIGNUP REQUEST ===');
     console.log('Email:', email);
@@ -130,6 +135,7 @@ router.post('/signup', [
       lastName,
       phoneNumber,
       companyName,
+      gstNumber: gstNumber.toUpperCase(),
       department,
       country,
       address: processedAddress,
@@ -208,9 +214,9 @@ router.post('/login', [
       });
     }
 
-    // Update last login
+    // Update last login without re-validating legacy user documents
+    await User.updateOne({ _id: user._id }, { lastLogin: new Date() });
     user.lastLogin = new Date();
-    await user.save();
 
     // Generate token
     const token = generateToken(user._id, user.role);
