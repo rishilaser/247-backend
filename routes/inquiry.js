@@ -975,7 +975,7 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
       inquiry = await Inquiry.findOne({
         _id: id
       })
-      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber address country')
       .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -987,7 +987,7 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
       inquiry = await Inquiry.findOne({
         inquiryNumber: id
       })
-      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
+      .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber address country')
       .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1191,7 +1191,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         inquiry = await Inquiry.findOne({
           _id: id
         })
-        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber address country')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1204,7 +1204,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
           _id: id,
           customer: req.userId
         })
-        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber address country')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1219,7 +1219,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         inquiry = await Inquiry.findOne({
           inquiryNumber: id
         })
-        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber address country')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'
@@ -1232,7 +1232,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
           inquiryNumber: id,
           customer: req.userId
         })
-        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber')
+        .populate('customer', 'firstName lastName companyName email phoneNumber gstNumber address country')
         .populate(
           'quotation',
           'quotationNumber status totalAmount validUntil orderPaymentWorkflowStatus payment_status payment_date'

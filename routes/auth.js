@@ -83,10 +83,10 @@ router.post('/signup', [
     .withMessage('Invalid GSTIN format'),
   body('department').isIn(['Engineering', 'Procurement', 'Design', 'Manufacturing', 'Quality Control', 'Other']),
   body('country').trim().isLength({ min: 2 }),
-  body('address.street').optional().trim(),
-  body('address.city').optional().trim(),
-  body('address.state').optional().trim(),
-  body('address.zipCode').optional().trim(),
+  body('address.street').trim().notEmpty().withMessage('Delivery street address is required'),
+  body('address.city').trim().notEmpty().withMessage('Delivery city is required'),
+  body('address.state').trim().notEmpty().withMessage('Delivery state is required'),
+  body('address.zipCode').trim().notEmpty().withMessage('Delivery PIN/ZIP code is required'),
   body('address.country').optional().trim(),
   body('password').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
 ], async (req, res) => {
