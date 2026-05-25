@@ -244,6 +244,7 @@ mongoose.connect(MONGODB_URI, {
   const notificationRoutes = require('./routes/notifications');
   const contactRoutes = require('./routes/contact');
   const adminRoutes = require('./routes/admin');
+  const userRoutes = require('./routes/users');
   const pdfExtractRoutes = require('./routes/pdfExtract');
   const zipExtractRoutes = require('./routes/zipExtract');
   const dashboardRoutes = require('./routes/dashboard');
@@ -264,6 +265,7 @@ mongoose.connect(MONGODB_URI, {
   app.use('/api/contact', contactRoutes);
   app.use('/contact', contactRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/users', userRoutes);
   app.use('/api/inquiry', pdfExtractRoutes);
   app.use('/api/inquiry', zipExtractRoutes);
   app.use('/api/dashboard', dashboardRoutes);

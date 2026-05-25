@@ -4,6 +4,7 @@ const Quotation = require('../models/Quotation');
 const Order = require('../models/Order');
 const { markInquiryPaymentReceivedForQuotation } = require('./inquiryPaymentStatusHelper');
 const { ensurePaymentSuccessNotifications } = require('./paymentNotificationHelper');
+const { sendPaymentSuccessEmailsOnce } = require('./paymentEmailHelper');
 
 /**
  * Persist successful Zoho payment (used by webhook and post-redirect API verification).
@@ -21,6 +22,13 @@ async function applyPaymentSuccess(quotationId, opts) {
   if (q.orderPaymentWorkflowStatus === 'Paid' && q.payment_status === 'Success') {
     console.log('Zoho payment: duplicate success (idempotent)', quotationId);
     await ensurePaymentSuccessNotifications(quotationId, opts);
+    if (q.order) {
+      try {
+        await sendPaymentSuccessEmailsOnce(q.order);
+      } catch (emailErr) {
+        console.error('Payment success emails (retry) failed:', emailErr.message);
+      }
+    }
     return { ok: true, duplicate: true };
   }
 
@@ -96,6 +104,14 @@ async function applyPaymentSuccess(quotationId, opts) {
   await markInquiryPaymentReceivedForQuotation(refreshed || q);
 
   await ensurePaymentSuccessNotifications(quotationId, opts);
+
+  if (q.order) {
+    try {
+      await sendPaymentSuccessEmailsOnce(q.order);
+    } catch (emailErr) {
+      console.error('Payment success emails failed:', emailErr.message);
+    }
+  }
 
   console.log('Zoho payment: quotation marked Paid', { quotationId, txnId });
 

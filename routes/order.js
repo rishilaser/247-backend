@@ -244,31 +244,26 @@ router.post('/', authenticateToken, [
     // Send emails, notifications, and WebSocket updates asynchronously (don't block response)
     setImmediate(async () => {
       try {
-        // Send payment confirmation email to admin (as per requirement)
-        try {
-          const { sendPaymentConfirmation } = require('../services/emailService');
-          await sendPaymentConfirmation(order);
-        } catch (emailError) {
-          console.error('Payment confirmation email failed:', emailError);
-        }
+        const paymentCompleted = order.payment?.status === 'completed';
 
-        // Send payment confirmation email to customer (if payment is completed)
-        if (order.payment?.status === 'completed' && paymentMethod !== 'cod') {
+        // Payment-success emails only after money is received (COD/direct on create, or via Zoho settlement)
+        if (paymentCompleted) {
           try {
-            console.log('📧 Sending payment confirmation email to customer...');
-            const { sendCustomerPaymentConfirmation } = require('../services/emailService');
-            await sendCustomerPaymentConfirmation(order);
-            console.log('✅ Payment confirmation email sent successfully to customer:', order.customer?.email);
+            const { sendPaymentSuccessEmailsOnce } = require('../services/paymentEmailHelper');
+            await sendPaymentSuccessEmailsOnce(order._id);
           } catch (emailError) {
-            console.error('❌ Customer payment confirmation email failed:', emailError);
-            // Don't fail the operation if email fails
+            console.error('Payment success emails failed:', emailError);
+          }
+        } else if (paymentMethod === 'online') {
+          try {
+            const { notifyOrderAwaitingPayment } = require('../services/statusNotificationService');
+            await notifyOrderAwaitingPayment(order);
+          } catch (notifyErr) {
+            console.error('Awaiting payment notification failed:', notifyErr.message);
           }
         }
 
-        // Note: Order confirmation email will be sent separately when admin confirms the order
-
         // Create notification for customer about payment/order
-        const paymentCompleted = order.payment?.status === 'completed';
         try {
           const Notification = require('../models/Notification');
           let customerTitle;
@@ -304,44 +299,35 @@ router.post('/', authenticateToken, [
           console.error('Failed to create customer order confirmation notification:', notificationError);
         }
 
-        // Create notification for all admin users about payment received
-        try {
-          const User = require('../models/User');
-          const Notification = require('../models/Notification');
-          const adminUsers = await User.find({ role: { $in: ['admin', 'backoffice', 'subadmin'] } });
-          
-          for (const admin of adminUsers) {
-            const adminTitle =
-              paymentMethod === 'online' && !paymentCompleted
-                ? 'Order Awaiting Payment'
-                : 'Payment Received';
-            const adminMessage =
-              paymentMethod === 'online' && !paymentCompleted
-                ? `Order ${order.orderNumber} created; awaiting online payment from ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}.`
-                : `Payment of ₹${order.totalAmount} received for order ${order.orderNumber}. Customer: ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}. Payment method: ${paymentMethod}`;
-            await Notification.createNotification({
-              title: adminTitle,
-              message: adminMessage,
-              type: 'success',
-              userId: admin._id,
-              relatedEntity: {
-                type: 'order',
-                entityId: order._id
-              },
-              metadata: {
-                orderNumber: order.orderNumber,
-                paymentAmount: order.totalAmount,
-                paymentMethod: paymentMethod,
-                customerName: `${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}`,
-                paidAt: new Date()
-              }
-            });
+        if (!paymentCompleted && paymentMethod === 'online') {
+          try {
+            const User = require('../models/User');
+            const Notification = require('../models/Notification');
+            const adminUsers = await User.find({ role: { $in: ['admin', 'backoffice', 'subadmin'] } });
+
+            for (const admin of adminUsers) {
+              await Notification.createNotification({
+                title: 'Order Awaiting Payment',
+                message: `Order ${order.orderNumber} created; awaiting online payment from ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}.`,
+                type: 'info',
+                userId: admin._id,
+                relatedEntity: {
+                  type: 'order',
+                  entityId: order._id,
+                },
+                metadata: {
+                  orderNumber: order.orderNumber,
+                  paymentAmount: order.totalAmount,
+                  paymentMethod: paymentMethod,
+                  customerName: `${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}`,
+                },
+              });
+            }
+          } catch (notificationError) {
+            console.error('Failed to create admin awaiting-payment notifications:', notificationError);
           }
-        } catch (notificationError) {
-          console.error('Failed to create admin payment notifications:', notificationError);
         }
 
-        // Send real-time WebSocket notification to customer
         try {
           const websocketService = require('../services/websocketService');
           websocketService.notifyOrderCreated(order);
@@ -349,12 +335,17 @@ router.post('/', authenticateToken, [
           console.error('WebSocket order notification failed:', wsError);
         }
 
-        // Send real-time WebSocket notification to admin users
-        try {
-          const websocketService = require('../services/websocketService');
-          websocketService.notifyPaymentReceived(order, order.totalAmount, `dummy_${order._id}`);
-        } catch (wsError) {
-          console.error('WebSocket admin payment notification failed:', wsError);
+        if (paymentCompleted) {
+          try {
+            const websocketService = require('../services/websocketService');
+            websocketService.notifyPaymentReceived(
+              order,
+              order.totalAmount,
+              order.payment?.transactionId || `order_${order._id}`
+            );
+          } catch (wsError) {
+            console.error('WebSocket payment notification failed:', wsError);
+          }
         }
       } catch (error) {
         console.error('Error in async order creation tasks:', error);

@@ -74,7 +74,8 @@ const orderSchema = new mongoose.Schema({
     transactionId: String,
     amount: Number,
     paidAt: Date,
-    gateway: String
+    gateway: String,
+    confirmationEmailSentAt: Date
   },
   production: {
     startDate: Date,

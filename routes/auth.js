@@ -460,7 +460,7 @@ router.put('/profile', async (req, res) => {
     });
 
     // Update allowed fields
-    const { firstName, lastName, phoneNumber, companyName, department, country, address } = req.body;
+    const { firstName, lastName, email, phoneNumber, companyName, gstNumber, department, country, address } = req.body;
     
     if (firstName) user.firstName = firstName;
     if (lastName) user.lastName = lastName;
@@ -468,6 +468,38 @@ router.put('/profile', async (req, res) => {
     if (companyName) user.companyName = companyName;
     if (department) user.department = department;
     if (country) user.country = country;
+
+    if (gstNumber !== undefined) {
+      const gst = String(gstNumber || '').trim().toUpperCase();
+      if (gst && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid GSTIN format'
+        });
+      }
+      user.gstNumber = gst;
+    }
+
+    if (email !== undefined && email !== null && String(email).trim()) {
+      const normalizedEmail = String(email).trim().toLowerCase();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid email address'
+        });
+      }
+      if (normalizedEmail !== user.email) {
+        const existingUser = await User.findOne({ email: normalizedEmail });
+        if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Email is already in use by another account'
+          });
+        }
+        user.email = normalizedEmail;
+      }
+    }
     
     // Update address if provided
     if (address) {

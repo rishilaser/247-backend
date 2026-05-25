@@ -87,7 +87,12 @@ const inquirySchema = new mongoose.Schema({
     default: Date.now
   },
   backOfficeNotes: String,
-  customerNotes: String
+  customerNotes: String,
+  /** Status values for which a status-update email was already sent (idempotency). */
+  statusEmailsSent: {
+    type: [String],
+    default: [],
+  },
 }, {
   timestamps: true
 });

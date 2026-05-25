@@ -12,6 +12,7 @@ const {
   syncInquiryWithQuotationPayment,
   syncInquiryListStatusesFromQuotations,
 } = require('../services/inquiryPaymentSyncHelper');
+const { filterQuotationMapForCustomer, sanitizeInquiryForCustomer } = require('../utils/quotationVisibility');
 const { sendInquiryNotification, sendInquiryConfirmationEmail } = require('../services/emailService');
 const { processExcelFile } = require('../services/excelService');
 // ✅ CLOUDINARY: Import will be done later with other functions
@@ -717,10 +718,14 @@ router.get('/', authenticateToken, async (req, res) => {
 
     await syncInquiryListStatusesFromQuotations(inquiries, quotationMapFull);
 
-    // Map inquiries with quotation data
+    const customerQuotationMap = filterQuotationMapForCustomer(quotationMap, false);
+
+    // Map inquiries with quotation data (draft quotations hidden from customers)
     const inquiriesWithQuotation = inquiries.map((inquiry) => ({
       ...inquiry,
-      quotation: inquiry.quotation ? quotationMap[inquiry.quotation.toString()] || null : null,
+      quotation: inquiry.quotation
+        ? customerQuotationMap[inquiry.quotation.toString()] || null
+        : null,
     }));
 
     res.json({
@@ -1071,10 +1076,14 @@ router.get('/customer', authenticateToken, async (req, res) => {
 
     await syncInquiryListStatusesFromQuotations(inquiries, quotationMapFull);
 
-    // Map inquiries with quotation data
+    const customerQuotationMap = filterQuotationMapForCustomer(quotationMap, false);
+
+    // Map inquiries with quotation data (draft quotations hidden from customers)
     const inquiriesWithQuotation = inquiries.map((inquiry) => ({
       ...inquiry,
-      quotation: inquiry.quotation ? quotationMap[inquiry.quotation.toString()] || null : null
+      quotation: inquiry.quotation
+        ? customerQuotationMap[inquiry.quotation.toString()] || null
+        : null,
     }));
 
     res.json({
@@ -1266,9 +1275,11 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     await syncInquiryWithQuotationPayment(inquiry);
 
+    const inquiryForClient = sanitizeInquiryForCustomer(inquiry, isAdmin);
+
     res.json({
       success: true,
-      inquiry
+      inquiry: inquiryForClient
     });
 
   } catch (error) {

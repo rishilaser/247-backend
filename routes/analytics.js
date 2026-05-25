@@ -10,7 +10,6 @@ const User = require('../models/User');
 
 // Import middleware
 const { authenticateToken } = require('../middleware/auth');
-const { getPaymentAnalytics } = require('../services/paymentService');
 
 // Middleware to check if user is admin/backoffice
 const requireBackOffice = (req, res, next) => {

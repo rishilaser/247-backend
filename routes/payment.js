@@ -2,8 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Order = require('../models/Order');
 const Quotation = require('../models/Quotation'); // Added Quotation model
-const { sendPaymentConfirmation, sendCustomerPaymentConfirmation } = require('../services/emailService');
-const { isRazorpayConfigured } = require('../services/paymentService');
+const { sendPaymentSuccessEmailsOnce } = require('../services/paymentEmailHelper');
 
 const router = express.Router();
 
@@ -41,13 +40,6 @@ router.get('/methods', authenticateToken, async (req, res) => {
         description: 'PayPal account payment',
         icon: '📧',
         enabled: true
-      },
-      {
-        id: 'razorpay',
-        name: 'Razorpay',
-        description: 'Indian payment gateway',
-        icon: '🇮🇳',
-        enabled: false
       }
     ];
 
@@ -207,25 +199,11 @@ router.post('/process', authenticateToken, [
       const { markInquiryPaymentReceivedForOrder } = require('../services/inquiryPaymentStatusHelper');
       await markInquiryPaymentReceivedForOrder(order);
 
-      // Send payment confirmation email to back office
       try {
-        await sendPaymentConfirmation(order);
+        await sendPaymentSuccessEmailsOnce(order._id);
       } catch (emailError) {
-        console.error('Payment confirmation email failed:', emailError);
-        // Don't fail the operation if email fails
+        console.error('Payment success emails failed:', emailError);
       }
-
-      // Send payment confirmation email to customer
-      try {
-        console.log('📧 Sending payment confirmation email to customer...');
-        await sendCustomerPaymentConfirmation(order);
-        console.log('✅ Payment confirmation email sent successfully to customer:', order.customer?.email);
-      } catch (emailError) {
-        console.error('❌ Customer payment confirmation email failed:', emailError);
-        // Don't fail the operation if email fails
-      }
-
-      // Note: Order confirmation email will be sent separately when admin confirms the order
 
       res.json({
         success: true,
@@ -594,30 +572,18 @@ router.post('/update-order', authenticateToken, async (req, res) => {
     const { markInquiryPaymentReceivedForOrder } = require('../services/inquiryPaymentStatusHelper');
     await markInquiryPaymentReceivedForOrder(existingOrder);
 
-    // Update quotation status to indicate order created
     quotation.status = 'order_created';
-    quotation.orderCreatedAt = new Date();
+    quotation.orderPaymentWorkflowStatus = 'Paid';
+    quotation.payment_status = 'Success';
+    quotation.payment_date = new Date();
+    quotation.orderCreatedAt = quotation.orderCreatedAt || new Date();
     await quotation.save();
 
-    // Send payment confirmation email to back office
     try {
-      await sendPaymentConfirmation(existingOrder);
+      await sendPaymentSuccessEmailsOnce(existingOrder._id);
     } catch (emailError) {
-      console.error('Payment confirmation email failed:', emailError);
-      // Don't fail the operation if email fails
+      console.error('Payment success emails failed:', emailError);
     }
-
-    // Send payment confirmation email to customer
-    try {
-      console.log('📧 Sending payment confirmation email to customer...');
-      await sendCustomerPaymentConfirmation(existingOrder);
-      console.log('✅ Payment confirmation email sent successfully to customer:', existingOrder.customer?.email);
-    } catch (emailError) {
-      console.error('❌ Customer payment confirmation email failed:', emailError);
-      // Don't fail the operation if email fails
-    }
-
-    // Note: Order confirmation email will be sent separately when admin confirms the order
 
     // Create notification for customer about payment success
     try {
@@ -700,8 +666,5 @@ router.post('/update-order', authenticateToken, async (req, res) => {
     });
   }
 });
-
-// Razorpay endpoints removed.
-// If you later add another payment gateway, implement it here under separate routes.
 
 module.exports = router;

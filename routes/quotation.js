@@ -9,6 +9,7 @@ const { sendQuotationSentEmail } = require('../services/emailService');
 const pdfService = require('../services/pdfService');
 
 const ADMIN_ROLES = ['admin', 'backoffice', 'subadmin'];
+const { isQuotationVisibleToCustomer } = require('../utils/quotationVisibility');
 
 /** Customer email/SMS — only from POST /api/quotation/:id/send (Quotations tab → Send). */
 const dispatchQuotationToCustomer = async (quotation) => {
@@ -309,38 +310,7 @@ router.post('/create', [
 
     console.log('📧 Quotation saved as draft — customer email NOT sent (use Quotations tab → Send)');
 
-    // Create notification for customer (in-app only; email is sent on POST /:id/send)
-    try {
-      const Notification = require('../models/Notification');
-      await Notification.createNotification({
-        title: 'Quotation in preparation',
-        message: `Quotation ${savedQuotation.quotationNumber} is being prepared for inquiry ${inquiry.inquiryNumber}. You will receive an email when it is sent to you.`,
-        type: 'info',
-        userId: inquiry.customer._id,
-        relatedEntity: {
-          type: 'quotation',
-          entityId: savedQuotation._id
-        },
-        metadata: {
-          quotationNumber: savedQuotation.quotationNumber,
-          inquiryNumber: inquiry.inquiryNumber,
-          totalAmount: totalAmount,
-          createdAt: new Date()
-        }
-      });
-      console.log('Customer notification created for quotation');
-    } catch (notificationError) {
-      console.error('Failed to create customer notification:', notificationError);
-    }
-
-    // Send real-time WebSocket notification to customer
-    try {
-      const websocketService = require('../services/websocketService');
-      websocketService.notifyQuotationCreated(savedQuotation);
-      console.log('Real-time quotation notification sent to customer');
-    } catch (wsError) {
-      console.error('WebSocket notification failed:', wsError);
-    }
+    // Customer is notified only when admin sends the quotation (POST /:id/send)
 
     res.json({
       success: true,
@@ -568,27 +538,7 @@ router.post('/upload', [
       }
     });
 
-    // OPTIMIZED: Create notifications asynchronously
-    setImmediate(async () => {
-      try {
-        const Notification = require('../models/Notification');
-        const inquiry = await Inquiry.findById(inquiryId).lean().populate('customer', '_id').select('inquiryNumber customer');
-        if (inquiry && inquiry.customer) {
-          await Notification.createNotification({
-            title: 'Quotation in preparation',
-            message: `Quotation ${savedQuotation.quotationNumber} is being prepared for inquiry ${inquiry.inquiryNumber || inquiryId}. You will receive an email when it is sent to you.`,
-            type: 'info',
-            userId: inquiry.customer._id,
-            relatedEntity: {
-              type: 'quotation',
-              entityId: savedQuotation._id
-            }
-          });
-        }
-      } catch (notificationError) {
-        console.error('Failed to create notification:', notificationError);
-      }
-    });
+    // Customer is notified only when admin sends the quotation (POST /:id/send)
 
   } catch (error) {
     console.error('Quotation upload error:', error);
@@ -694,10 +644,12 @@ router.get('/customer', authenticateToken, async (req, res) => {
     const customerInquiries = await Inquiry.find({ customer: userId }).select('_id').lean();
     const inquiryIds = customerInquiries.map(inquiry => inquiry._id);
     
-    // Build query
+    // Build query — customers never see draft quotations
     const query = { inquiryId: { $in: inquiryIds } };
-    if (status) {
+    if (status && String(status).toLowerCase() !== 'draft') {
       query.status = status;
+    } else {
+      query.status = { $ne: 'draft' };
     }
     
     // OPTIMIZED: Get quotations and total count in parallel
@@ -771,11 +723,18 @@ router.get('/customer', authenticateToken, async (req, res) => {
 router.get('/:inquiryId', authenticateToken, async (req, res) => {
   try {
     const { inquiryId } = req.params;
+    const isAdmin = ADMIN_ROLES.includes(req.userRole);
 
     // Fetch quotation from database
     const quotation = await Quotation.findOne({ inquiryId });
 
     if (quotation) {
+      if (!isAdmin && !isQuotationVisibleToCustomer(quotation.status)) {
+        return res.json({
+          success: false,
+          message: 'Quotation not available yet'
+        });
+      }
       // Manually populate inquiry data
       const quotationObj = quotation.toObject();
       try {
@@ -869,6 +828,12 @@ router.get('/id/:id', authenticateToken, async (req, res) => {
         return res.status(403).json({
           success: false,
           message: 'Access denied. This quotation does not belong to you.'
+        });
+      }
+      if (!isQuotationVisibleToCustomer(quotation.status)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Quotation not available yet'
         });
       }
     }
@@ -1042,6 +1007,13 @@ router.get('/customer/:id', authenticateToken, async (req, res) => {
       });
     }
 
+    if (!isQuotationVisibleToCustomer(quotation.status)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation not available yet'
+      });
+    }
+
     // Manually populate inquiry data
     const quotationObj = quotation.toObject();
     try {
@@ -1102,6 +1074,13 @@ router.post('/:id/response', authenticateToken, async (req, res) => {
       return res.status(403).json({
         success: false,
         message: 'Access denied. This quotation does not belong to you.'
+      });
+    }
+
+    if (!isQuotationVisibleToCustomer(quotation.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'This quotation is not available for response yet'
       });
     }
 
@@ -1215,6 +1194,12 @@ router.get('/:id/pdf', authenticateToken, async (req, res) => {
         return res.status(403).json({
           success: false,
           message: 'Access denied. This quotation does not belong to you.'
+        });
+      }
+      if (!isQuotationVisibleToCustomer(quotation.status)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Quotation is not available until it has been sent to you.'
         });
       }
     }

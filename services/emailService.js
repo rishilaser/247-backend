@@ -2114,11 +2114,258 @@ const testEmailService = async (testEmail) => {
   }
 };
 
+const INQUIRY_STATUS_EMAIL_TEMPLATES = {
+  reviewed: {
+    subject: (n) => `Inquiry ${n} Under Review - 247 CutBend`,
+    heading: 'Inquiry Under Review',
+    accent: '#2196F3',
+    body: (n) =>
+      `Your inquiry <strong>${n}</strong> is now being reviewed by our team. We will notify you when your quotation is ready.`,
+    nextSteps: [
+      'Our engineers are reviewing your parts and drawings',
+      'You will receive an email when your quotation is ready',
+      'Track progress anytime from your dashboard',
+    ],
+  },
+  quoted: {
+    subject: (n) => `Inquiry ${n} Quoted - 247 CutBend`,
+    heading: 'Quotation In Progress',
+    accent: '#FF9800',
+    body: (n) =>
+      `Your inquiry <strong>${n}</strong> has been quoted. You will be notified when the formal quotation is ready to view.`,
+    nextSteps: [
+      'Your quotation is being finalized',
+      'You will receive a separate email when the quotation PDF is sent',
+      'You can accept or reject the quote from your account',
+    ],
+  },
+  accepted: {
+    subject: (n) => `Quote Accepted - Inquiry ${n} - 247 CutBend`,
+    heading: 'Quote Accepted',
+    accent: '#4CAF50',
+    body: (n) =>
+      `Thank you — you accepted the quote for inquiry <strong>${n}</strong>. Please complete payment to confirm your order.`,
+    nextSteps: [
+      'Log in to your dashboard and open the inquiry',
+      'Click Pay Now to complete secure online payment',
+      'Your order will be confirmed after payment is received',
+    ],
+    ctaLabel: 'Complete Payment',
+  },
+  payment_received: {
+    subject: (n) => `Payment Received - Inquiry ${n} - 247 CutBend`,
+    heading: 'Payment Received',
+    accent: '#4CAF50',
+    body: (n) =>
+      `We have received your payment for inquiry <strong>${n}</strong>. Your order will be confirmed by our team shortly.`,
+    nextSteps: [
+      'Payment has been recorded successfully',
+      'Our team will confirm your order and begin processing',
+      'You will receive updates as your order progresses',
+    ],
+    ctaLabel: 'View Dashboard',
+  },
+  rejected: {
+    subject: (n) => `Inquiry ${n} Update - 247 CutBend`,
+    heading: 'Inquiry Rejected',
+    accent: '#f44336',
+    body: (n) =>
+      `Inquiry <strong>${n}</strong> has been marked as rejected. Contact us if you have questions or would like to submit a revised inquiry.`,
+    nextSteps: [
+      'You may submit a new inquiry with updated requirements',
+      'Contact support if you need clarification',
+    ],
+  },
+  cancelled: {
+    subject: (n) => `Inquiry ${n} Cancelled - 247 CutBend`,
+    heading: 'Inquiry Cancelled',
+    accent: '#757575',
+    body: (n) =>
+      `Inquiry <strong>${n}</strong> has been cancelled. Contact us if this was unexpected.`,
+    nextSteps: ['You may submit a new inquiry at any time'],
+  },
+};
+
+function formatInquiryStatusLabel(status) {
+  const labels = {
+    payment_received: 'Paid',
+    pending: 'Pending',
+    reviewed: 'Under Review',
+    quoted: 'Quoted',
+    accepted: 'Accepted',
+    rejected: 'Rejected',
+    cancelled: 'Cancelled',
+  };
+  return labels[status] || String(status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+async function resolveInquiryCustomerForEmail(inquiry) {
+  if (!inquiry) return null;
+
+  if (inquiry.customer && typeof inquiry.customer === 'object' && inquiry.customer.email) {
+    return {
+      firstName: inquiry.customer.firstName || 'Customer',
+      lastName: inquiry.customer.lastName || '',
+      email: inquiry.customer.email,
+      companyName: inquiry.customer.companyName || '',
+    };
+  }
+
+  const customerId = inquiry.customer?._id || inquiry.customer;
+  if (!customerId) return null;
+
+  const User = require('../models/User');
+  const user = await User.findById(customerId).select('firstName lastName email companyName').lean();
+  if (!user?.email || user.email === 'customer@example.com') return null;
+
+  return {
+    firstName: user.firstName || 'Customer',
+    lastName: user.lastName || '',
+    email: user.email,
+    companyName: user.companyName || '',
+  };
+}
+
+function buildInquiryStatusEmailHtml({ customerName, inquiryNumber, newStatus, oldStatus, tpl }) {
+  const clientBase = (process.env.CLIENT_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+  const dashboardUrl = `${clientBase}/dashboard`;
+  const nextStepsHtml = (tpl.nextSteps || [])
+    .map((step) => `<li style="margin: 6px 0; color: #555;">${step}</li>`)
+    .join('');
+
+  const ctaBlock = tpl.ctaLabel
+    ? `
+    <p style="text-align: center; margin: 28px 0;">
+      <a href="${dashboardUrl}" style="display: inline-block; background-color: ${tpl.accent}; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600;">${tpl.ctaLabel}</a>
+    </p>`
+    : '';
+
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background-color: ${tpl.accent}; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+        <h1 style="margin: 0; font-size: 26px; font-weight: 700;">247 CUTBEND</h1>
+        <p style="margin: 6px 0 0 0; font-size: 13px; opacity: 0.9;">SHEET METAL PARTS ON DEMAND</p>
+        <h2 style="margin: 18px 0 6px 0; font-size: 22px;">${tpl.heading}</h2>
+      </div>
+      <div style="background-color: white; padding: 28px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.08);">
+        <p style="color: #333;">Dear ${customerName},</p>
+        <p style="color: #555; line-height: 1.6;">${tpl.body(inquiryNumber)}</p>
+        <div style="background-color: #f8f9fa; padding: 16px 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid ${tpl.accent};">
+          <p style="margin: 6px 0; color: #555;"><strong>Inquiry Number:</strong> ${inquiryNumber}</p>
+          <p style="margin: 6px 0; color: #555;"><strong>Previous Status:</strong> ${formatInquiryStatusLabel(oldStatus)}</p>
+          <p style="margin: 6px 0; color: #555;"><strong>Current Status:</strong> ${formatInquiryStatusLabel(newStatus)}</p>
+        </div>
+        ${nextStepsHtml ? `<ul style="margin: 16px 0; padding-left: 22px;">${nextStepsHtml}</ul>` : ''}
+        ${ctaBlock}
+        <p style="color: #777; font-size: 13px; margin-top: 24px;">Log in at <a href="${dashboardUrl}" style="color: ${tpl.accent};">${dashboardUrl}</a> to view details.</p>
+      </div>
+      <div style="background-color: #333; color: white; padding: 16px; text-align: center; font-size: 12px; border-radius: 0 0 8px 8px;">
+        <p style="margin: 0;">© ${getEmailCopyrightYear()} 247 CutBend. All rights reserved.</p>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Email customer when inquiry status changes (accepted, paid, etc.).
+ */
+const sendInquiryStatusUpdateEmail = async (inquiry, newStatus, oldStatus) => {
+  const tpl = INQUIRY_STATUS_EMAIL_TEMPLATES[newStatus];
+  if (!tpl || !inquiry) return { sent: false, reason: 'no_template' };
+
+  const transporter = createTransporter();
+  if (!transporter) {
+    console.log('SMTP not configured. Inquiry status email skipped:', newStatus);
+    return { sent: false, reason: 'smtp_disabled' };
+  }
+
+  const customerInfo = await resolveInquiryCustomerForEmail(inquiry);
+  if (!customerInfo?.email) {
+    console.warn('Inquiry status email: no customer email', inquiry._id, newStatus);
+    return { sent: false, reason: 'no_email' };
+  }
+
+  const inquiryNumber = inquiry.inquiryNumber || String(inquiry._id);
+  const customerName =
+    `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || 'Valued Customer';
+
+  const mailOptions = {
+    from: process.env.SMTP_FROM || 'noreply@247cutbend.com',
+    to: customerInfo.email,
+    subject: tpl.subject(inquiryNumber),
+    html: buildInquiryStatusEmailHtml({
+      customerName,
+      inquiryNumber,
+      newStatus,
+      oldStatus,
+      tpl,
+    }),
+  };
+
+  const result = await transporter.sendMail(mailOptions);
+  console.log('Inquiry status email sent to customer:', {
+    inquiryNumber,
+    newStatus,
+    messageId: result.messageId,
+  });
+  return { sent: true, messageId: result.messageId };
+};
+
+/**
+ * Notify back office when inquiry becomes accepted, paid, or rejected.
+ */
+const sendInquiryStatusStaffEmail = async (inquiry, newStatus, oldStatus) => {
+  const transporter = createTransporter();
+  if (!transporter || !inquiry) return { sent: false };
+
+  const inquiryNumber = inquiry.inquiryNumber || String(inquiry._id);
+  const customerInfo = await resolveInquiryCustomerForEmail(inquiry);
+  const customerLabel = customerInfo
+    ? `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() ||
+      customerInfo.email
+    : 'Unknown customer';
+
+  const titles = {
+    accepted: 'Customer Accepted Quote',
+    payment_received: 'Inquiry Payment Received',
+    rejected: 'Inquiry Rejected by Customer',
+  };
+
+  const messages = {
+    accepted: `Customer accepted the quote for inquiry ${inquiryNumber} (${customerLabel}). Awaiting payment.`,
+    payment_received: `Payment received for inquiry ${inquiryNumber} (${customerLabel}). Status: Paid.`,
+    rejected: `Inquiry ${inquiryNumber} was rejected by ${customerLabel}.`,
+  };
+
+  const mailOptions = {
+    from: process.env.SMTP_FROM || 'noreply@247cutbend.com',
+    to: process.env.BACKOFFICE_EMAIL || 'backoffice@247cutbend.com',
+    subject: `${titles[newStatus] || 'Inquiry Update'} - ${inquiryNumber}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #333;">${titles[newStatus] || 'Inquiry Status Update'}</h2>
+        <p><strong>Inquiry:</strong> ${inquiryNumber}</p>
+        <p><strong>Customer:</strong> ${customerLabel}${customerInfo?.email ? ` (${customerInfo.email})` : ''}</p>
+        <p><strong>Previous status:</strong> ${formatInquiryStatusLabel(oldStatus)}</p>
+        <p><strong>New status:</strong> ${formatInquiryStatusLabel(newStatus)}</p>
+        <p style="margin-top: 20px;">${messages[newStatus] || ''}</p>
+        <p style="color: #666; font-size: 13px;">Log in to the back office to manage this inquiry.</p>
+      </div>
+    `,
+  };
+
+  await transporter.sendMail(mailOptions);
+  console.log('Inquiry status staff email sent:', { inquiryNumber, newStatus });
+  return { sent: true };
+};
+
 module.exports = {
   sendWelcomeEmail,
   sendLoginNotificationEmail,
   sendInquiryNotification,
   sendInquiryConfirmationEmail,
+  sendInquiryStatusUpdateEmail,
+  sendInquiryStatusStaffEmail,
   sendQuotationEmail,
   sendQuotationSentEmail,
   sendOrderConfirmation,

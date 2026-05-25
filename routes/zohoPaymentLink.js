@@ -485,7 +485,7 @@ router.post('/payment-link', authenticateToken, async (req, res) => {
       ...(customerEmail ? { email: customerEmail } : {}),
       ...(zohoPhone ? { phone: zohoPhone, ...(phone_country_code ? { phone_country_code } : {}) } : {}),
       ...(return_url ? { return_url } : {}),
-      ...(customerEmail ? { notify_customer: { email: true } } : {})
+      // Do not ask Zoho to email the customer — we send payment-success mail only after gateway confirms payment.
     };
 
     const zohoBase =

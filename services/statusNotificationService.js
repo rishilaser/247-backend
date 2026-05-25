@@ -199,6 +199,13 @@ async function notifyInquiryStatusChange(inquiry, oldStatus, newStatus) {
     statusKey,
     metadata: { inquiryNumber: ref, oldStatus, newStatus },
   });
+
+  setImmediate(() => {
+    const { sendInquiryStatusEmailsOnce } = require('./inquiryStatusEmailHelper');
+    sendInquiryStatusEmailsOnce(inquiry, oldStatus, newStatus).catch((err) => {
+      console.error('Inquiry status email failed:', err.message);
+    });
+  });
 }
 
 /**
