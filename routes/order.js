@@ -7,7 +7,7 @@ const { sendOrderConfirmation } = require('../services/emailService');
 const router = express.Router();
 
 // Import middleware from auth.js
-const { authenticateToken, requireBackOffice } = require('../middleware/auth');
+const { authenticateToken, requireBackOffice, requireStaffPermission } = require('../middleware/auth');
 
 // Get customer orders (Customer access) - OPTIMIZED
 router.get('/customer', authenticateToken, async (req, res) => {
@@ -36,7 +36,7 @@ router.get('/customer', authenticateToken, async (req, res) => {
 });
 
 // Get all orders (Back Office) - ULTRA OPTIMIZED
-router.get('/', authenticateToken, requireBackOffice, async (req, res) => {
+router.get('/', authenticateToken, requireStaffPermission('canManageOrders'), async (req, res) => {
   try {
     const { limit = 500 } = req.query; // Default limit to 500 for faster response
     
@@ -451,7 +451,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Update order delivery time (Back Office)
-router.put('/:id/delivery-time', authenticateToken, requireBackOffice, [
+router.put('/:id/delivery-time', authenticateToken, requireStaffPermission('canManageOrders'), [
   body('estimatedDelivery').isISO8601().withMessage('Valid delivery date is required'),
   body('notes').optional().isString()
 ], async (req, res) => {
@@ -546,7 +546,7 @@ router.put('/:id/delivery-time', authenticateToken, requireBackOffice, [
 });
 
 // Update order status (Back Office)
-router.put('/:id/status', authenticateToken, requireBackOffice, [
+router.put('/:id/status', authenticateToken, requireStaffPermission('canManageOrders'), [
   body('status').isIn(['pending', 'confirmed', 'in_production', 'ready_for_dispatch', 'dispatched', 'delivered', 'cancelled']).withMessage('Invalid status'),
   body('notes').optional().isString()
 ], async (req, res) => {
@@ -671,7 +671,7 @@ router.put('/:id/status', authenticateToken, requireBackOffice, [
 });
 
 // Update dispatch details (Back Office)
-router.put('/:id/dispatch', authenticateToken, requireBackOffice, [
+router.put('/:id/dispatch', authenticateToken, requireStaffPermission('canManageOrders'), [
   body('courier').notEmpty().withMessage('Courier name is required'),
   body('trackingNumber').notEmpty().withMessage('Tracking number is required'),
   body('estimatedDelivery')

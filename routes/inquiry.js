@@ -17,7 +17,7 @@ const { sendInquiryNotification, sendInquiryConfirmationEmail } = require('../se
 const { processExcelFile } = require('../services/excelService');
 // ✅ CLOUDINARY: Import will be done later with other functions
 const mongoose = require('mongoose');
-const { requireBackOffice } = require('../middleware/auth');
+const { requireBackOffice, requireStaffPermission } = require('../middleware/auth');
 const websocketService = require('../services/websocketService');
 const archiver = require('archiver');
 const axios = require('axios');
@@ -744,7 +744,7 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // Get all inquiries (Back Office) - ULTRA OPTIMIZED for <1s response
-router.get('/admin/all', authenticateToken, requireBackOffice, async (req, res) => {
+router.get('/admin/all', authenticateToken, requireStaffPermission('canViewAllInquiries'), async (req, res) => {
   const startTime = Date.now();
   try {
     // Pagination parameters
@@ -950,7 +950,7 @@ router.get('/admin/all', authenticateToken, requireBackOffice, async (req, res) 
 });
 
 // Get specific inquiry (Back Office - can access any inquiry)
-router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) => {
+router.get('/admin/:id', authenticateToken, requireStaffPermission('canViewAllInquiries'), async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -1762,7 +1762,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // Admin route to update inquiry parts
-router.put('/admin/:id', authenticateToken, requireBackOffice, [
+router.put('/admin/:id', authenticateToken, requireStaffPermission('canViewAllInquiries'), [
   body('parts').isArray({ min: 1 }),
   body('parts.*.material').notEmpty().trim(),
   body('parts.*.thickness').notEmpty().trim(),

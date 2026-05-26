@@ -5,11 +5,26 @@ const Order = require('../models/Order');
 const Inquiry = require('../models/Inquiry');
 const Quotation = require('../models/Quotation');
 const NomenclatureConfig = require('../models/NomenclatureConfig');
-const { authenticateToken, requireAdmin, requireBackOffice } = require('../middleware/auth');
+const {
+  authenticateToken,
+  requireAdmin,
+  requireBackOffice,
+  requireStaffPermission,
+  requireAnyStaffPermission
+} = require('../middleware/auth');
 const router = express.Router();
 
 // Get dashboard statistics (Admin/Back Office)
-router.get('/dashboard/stats', authenticateToken, requireBackOffice, async (req, res) => {
+router.get(
+  '/dashboard/stats',
+  authenticateToken,
+  requireAnyStaffPermission(
+    'canCreateQuotations',
+    'canManageUsers',
+    'canViewAllInquiries',
+    'canManageOrders'
+  ),
+  async (req, res) => {
   try {
     // Get counts in parallel for better performance
     const [
@@ -46,7 +61,7 @@ router.get('/dashboard/stats', authenticateToken, requireBackOffice, async (req,
 });
 
 // Get all orders (Admin/Back Office) - ULTRA OPTIMIZED for <1s response
-router.get('/orders', authenticateToken, requireBackOffice, async (req, res) => {
+router.get('/orders', authenticateToken, requireStaffPermission('canManageOrders'), async (req, res) => {
   try {
     const { limit = 100 } = req.query; // Reduced to 100 for <1s response
     

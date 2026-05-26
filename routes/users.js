@@ -2,7 +2,7 @@ const express = require('express');
 const XLSX = require('xlsx');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireStaffPermission } = require('../middleware/auth');
 const { buildAttachmentContentDisposition } = require('../utils/contentDisposition');
 
 const router = express.Router();
@@ -67,7 +67,7 @@ const formatExportDate = (value) => {
 };
 
 // Export customers to Excel
-router.get('/export/excel', authenticateToken, requireAdmin, async (req, res) => {
+router.get('/export/excel', authenticateToken, requireStaffPermission('canManageUsers'), async (req, res) => {
   try {
     const filter = buildUserListFilter({ ...req.query, role: req.query.role || 'customer' });
 
@@ -147,7 +147,7 @@ router.get('/export/excel', authenticateToken, requireAdmin, async (req, res) =>
 });
 
 // List users (admin/backoffice)
-router.get('/', authenticateToken, requireAdmin, async (req, res) => {
+router.get('/', authenticateToken, requireStaffPermission('canManageUsers'), async (req, res) => {
   try {
     const { page = '1', limit = '50' } = req.query;
     const filter = buildUserListFilter(req.query);
@@ -186,7 +186,7 @@ router.get('/', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Get single user
-router.get('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.get('/:id', authenticateToken, requireStaffPermission('canManageUsers'), async (req, res) => {
   try {
     const user = await User.findById(req.params.id, CUSTOMER_SELECT)
       .populate('createdBy', 'firstName lastName email');

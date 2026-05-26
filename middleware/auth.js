@@ -73,6 +73,88 @@ const requireBackOffice = (req, res, next) => {
   next();
 };
 
+// Sub-admin permission check (admin/backoffice always allowed)
+const requireStaffPermission = (permissionKey) => async (req, res, next) => {
+  try {
+    if (['admin', 'backoffice'].includes(req.userRole)) {
+      return next();
+    }
+
+    if (req.userRole !== 'subadmin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Back office access required'
+      });
+    }
+
+    const User = require('../models/User');
+    const user = await User.findById(req.userId).select('permissions role');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (user.permissions?.[permissionKey]) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: 'Insufficient permissions'
+    });
+  } catch (error) {
+    console.error('Staff permission check error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+const requireAnyStaffPermission = (...permissionKeys) => async (req, res, next) => {
+  try {
+    if (['admin', 'backoffice'].includes(req.userRole)) {
+      return next();
+    }
+
+    if (req.userRole !== 'subadmin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Back office access required'
+      });
+    }
+
+    const User = require('../models/User');
+    const user = await User.findById(req.userId).select('permissions role');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const allowed = permissionKeys.some((key) => user.permissions?.[key]);
+    if (allowed) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: 'Insufficient permissions'
+    });
+  } catch (error) {
+    console.error('Staff permission check error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
 // Middleware to check quotation creation permission
 const requireQuotationPermission = async (req, res, next) => {
   try {
@@ -113,5 +195,7 @@ module.exports = {
   authenticateToken,
   requireAdmin,
   requireBackOffice,
+  requireStaffPermission,
+  requireAnyStaffPermission,
   requireQuotationPermission
 };
