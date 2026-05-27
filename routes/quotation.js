@@ -295,16 +295,15 @@ router.post('/create', [
       }
     }
 
-    // Update inquiry status to 'quoted'
-    console.log('=== STEP 12: UPDATING INQUIRY STATUS ===');
+    // Link quotation to inquiry; status stays pending until admin clicks Send
+    console.log('=== STEP 12: LINKING QUOTATION TO INQUIRY ===');
     try {
-      await Inquiry.findByIdAndUpdate(inquiryId, { 
-        status: 'quoted',
-        quotation: savedQuotation._id 
+      await Inquiry.findByIdAndUpdate(inquiryId, {
+        quotation: savedQuotation._id
       });
-      console.log('Inquiry status updated to quoted');
+      console.log('Quotation linked to inquiry (status unchanged until Send)');
     } catch (updateError) {
-      console.error('Error updating inquiry status:', updateError);
+      console.error('Error linking quotation to inquiry:', updateError);
       // Don't fail the request if inquiry update fails
     }
 
@@ -483,10 +482,9 @@ router.post('/upload', [
     console.log('   - Quotation ID:', savedQuotation._id);
     console.log('   - Quotation Number:', savedQuotation.quotationNumber);
     
-    // Update inquiry status
-    await Inquiry.findByIdAndUpdate(inquiryId, { 
-      status: 'quoted',
-      quotation: savedQuotation._id 
+    // Link quotation only — customer sees "quoted" after admin sends from Quotations tab
+    await Inquiry.findByIdAndUpdate(inquiryId, {
+      quotation: savedQuotation._id
     });
 
     // Return response immediately for fast API response
@@ -918,6 +916,17 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
     }
     await quotation.save();
     console.log('Quotation status updated to sent');
+
+    // Customer panel: pending → quoted only when Send is clicked (not on draft create/upload)
+    if (quotation.inquiryId) {
+      const inquiry = await Inquiry.findById(quotation.inquiryId);
+      if (inquiry && inquiry.status !== 'quoted') {
+        inquiry.status = 'quoted';
+        inquiry.quotation = quotation._id;
+        await inquiry.save();
+        console.log('Inquiry status updated to quoted on send');
+      }
+    }
 
     // Return response immediately for fast API response
     res.json({
