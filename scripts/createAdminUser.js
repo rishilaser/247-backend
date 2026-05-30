@@ -35,7 +35,7 @@ const createAdminUser = async () => {
     const adminUser = new User({
       firstName: 'Admin',
       lastName: 'User',
-      email: 'admin@247cutbend.com',
+      email: 'admin@247cutbend.in',
       password: hashedPassword,
       phoneNumber: '9876543210',
       companyName: '247 Cutbend',
